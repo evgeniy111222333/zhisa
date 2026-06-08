@@ -165,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     factory = _build_inner_factory(cfg, inner, spec=spec)
     continual_cfg = _build_continual_cfg(cfg, args)
 
-    trainer = OnlineContinualTrainer(model, continual_cfg, factory)
+    trainer = OnlineContinualTrainer(model, continual_cfg, factory, spec=spec)
     result = trainer.fit()
 
     print("S5 online continual training complete.")

@@ -41,7 +41,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
+from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.utils.logging import get_logger
 from zhisa.utils.seeding import set_seed
@@ -416,10 +418,22 @@ class OnlineContinualTrainer:
         model: nn.Module,
         cfg: ContinualConfig,
         inner_factory: Callable[[nn.Module], Any],
+        spec: Optional[SampleSpec] = None,
     ):
         self.model = model
         self.cfg = cfg
         self.inner_factory = inner_factory
+        # ``spec`` is used by the replay probe and EWC calibration to
+        # build real forward-able inputs from the current df. Falls back
+        # to a default ``SampleSpec`` derived from ``model.cfg`` if not
+        # provided (so the trainer still works with synthetic obs only,
+        # just with less informative calibration).
+        if spec is None:
+            spec = SampleSpec(
+                chart_window=int(getattr(model.cfg, "window", 32)),
+                image_size=int(getattr(model.cfg, "image_size", 32)),
+            )
+        self.spec = spec
         self.replay = ReplayBuffer(cfg.replay_capacity, seed=cfg.seed)
         self.ewc = EWCLoss(ewc_lambda=cfg.ewc_lambda)
         self.drift = DriftDetector(
@@ -428,6 +442,8 @@ class OnlineContinualTrainer:
         )
         set_seed(cfg.seed)
         self._drift_events: int = 0
+        # Cached most-recent df for replay probes / EWC calibration.
+        self._last_df: Optional[pd.DataFrame] = None
 
     @property
     def drift_events(self) -> int:
@@ -476,6 +492,8 @@ class OnlineContinualTrainer:
     def _train_one_iteration(
         self, df: pd.DataFrame, iteration: int
     ) -> ContinualStepResult:
+        # Cache the iteration's df for the replay probe / EWC calibration.
+        self._last_df = df
         # Inner trainer (fresh every iteration so it can re-build
         # datasets / optimisers with the latest model parameters).
         inner = self.inner_factory(self.model)
@@ -496,19 +514,29 @@ class OnlineContinualTrainer:
         # Replay update.
         replay_loss, n_replay = self._replay_step()
 
-        # EWC penalty (just to record — the actual EWC gradient is
-        # applied inside the inner step if the inner trainer supports
-        # it; otherwise it's a passive regulariser).
-        ewc_penalty = self.ewc.penalty_value(self.model)
-
         # Read the most recent reward from the replay buffer's most
-        # recent sample (fallback to 0.0) and feed it to drift.
+        # recent sample (fallback to 0.0) and feed it to drift. This
+        # must happen *before* we (re-)consolidate EWC so that the
+        # penalty we record reflects the just-detected regime.
         last_reward = 0.0
         if len(self.replay) > 0:
             last = self.replay._buf[-1]
             if "reward" in last.data:
                 last_reward = float(last.data["reward"])
         self.record_episode_reward(last_reward)
+
+        # EWC: consolidate (snapshot theta* + Fisher) on the first
+        # iteration, and re-consolidate every time drift is signalled.
+        # Without this, ``ewc.has_reference`` stays False and the
+        # penalty is permanently 0. We do it *after* the inner step so
+        # the Fisher is computed w.r.t. the just-updated parameters.
+        if not self.ewc.has_reference or self.drift.drift_detected:
+            self._consolidate_from_df(df)
+
+        # EWC penalty (just to record — the actual EWC gradient is
+        # applied inside the inner step if the inner trainer supports
+        # it; otherwise it's a passive regulariser).
+        ewc_penalty = self.ewc.penalty_value(self.model)
 
         step = ContinualStepResult(
             iteration=iteration,
@@ -545,6 +573,39 @@ class OnlineContinualTrainer:
             }
             self.replay.add(ReplaySample(data=t))
 
+    def _consolidate_from_df(self, df: pd.DataFrame) -> None:
+        """Build a small calibration set from ``df`` and call
+        :meth:`consolidate` so the EWC Fisher + reference snapshot are
+        populated. Failures are logged and swallowed so the trainer
+        keeps running with a passive (zero) EWC regulariser.
+        """
+        if df is None or len(df) == 0:
+            return
+        try:
+            ds = MarketDataset(df, spec=self.spec)
+        except Exception as e:
+            logger.debug("EWC: failed to build calibration dataset: %s", e)
+            return
+        if len(ds) == 0:
+            return
+        loader = DataLoader(
+            ds, batch_size=min(4, len(ds)),
+            shuffle=True, collate_fn=lambda batch: {
+                "chart": torch.stack([b["chart"] for b in batch]),
+                "numeric": torch.stack([b["numeric"] for b in batch]),
+                "context": torch.stack([b["context"] for b in batch]),
+            },
+        )
+        batches = []
+        for i, b in enumerate(loader):
+            if i >= 4:
+                break
+            b = {k: v.to(self.cfg.device) for k, v in b.items()}
+            batches.append(b)
+        if not batches:
+            return
+        self.consolidate(calibration_batches=batches)
+
     def _run_inner(self, inner: Any, df: pd.DataFrame) -> float:
         """Run ``cfg.inner_epochs`` epochs through the inner trainer.
 
@@ -553,23 +614,44 @@ class OnlineContinualTrainer:
           * ``.fit(df, val_df=None)`` -> supervised, returns history
           * ``.fit()``               -> SSL (synthetic), returns history
         The first matching shape wins.
+
+        Different inner trainers name their scalar loss differently:
+        SSL uses ``"total"``, supervised uses ``"loss"``, PPO uses
+        ``"total_loss"`` or ``"policy_loss"``. We probe the last
+        history entry under a small priority list so the orchestrator
+        records a real value regardless of which inner trainer is in
+        use.
         """
+        _LOSS_KEYS = ("loss", "total", "total_loss", "policy_loss", "final_loss")
         try:
             result = inner.fit(df)
         except TypeError:
             result = inner.fit()
         if isinstance(result, dict):
             hist = result.get("history", [])
-            if hist and isinstance(hist[-1], dict) and "loss" in hist[-1]:
-                return float(hist[-1]["loss"])
+            if hist and isinstance(hist[-1], dict):
+                for k in _LOSS_KEYS:
+                    if k in hist[-1]:
+                        try:
+                            return float(hist[-1][k])
+                        except (TypeError, ValueError):
+                            continue
             return float(result.get("final_loss", 0.0))
         # SupervisedTrainer.fit returns a SupervisedResult dataclass.
         if hasattr(result, "final_loss"):
-            return float(result.final_loss)
+            try:
+                return float(result.final_loss)
+            except (TypeError, ValueError):
+                pass
         if hasattr(result, "history") and result.history:
             last = result.history[-1]
-            if isinstance(last, dict) and "loss" in last:
-                return float(last["loss"])
+            if isinstance(last, dict):
+                for k in _LOSS_KEYS:
+                    if k in last:
+                        try:
+                            return float(last[k])
+                        except (TypeError, ValueError):
+                            continue
         return 0.0
 
     def _replay_step(self) -> tuple[float, int]:
@@ -579,33 +661,52 @@ class OnlineContinualTrainer:
         implementation, we only *measure* the model's behaviour on
         the replay batch — we don't actually update parameters.
         This still exercises the EWC penalty and the replay plumbing.
+
+        The replay buffer intentionally stores only scalar fields
+        (bar_idx, close, reward) to keep memory bounded, so we build
+        a fresh probe by wrapping the iteration's ``_last_df`` into a
+        :class:`MarketDataset` and sampling a mini-batch of multimodal
+        inputs. This gives a real, non-zero loss signal that reflects
+        the *current* model state on *real* data, which is what the
+        replay probe is supposed to measure.
         """
         if len(self.replay) == 0:
             return 0.0, 0
         batch = self.replay.sample(self.cfg.replay_batch_size)
         if not batch:
             return 0.0, 0
-        # Build a tiny model input by reusing the first sample's obs.
-        # This is intentionally a cheap, no-grad probe.
-        probe = batch[0].data
-        obs = {k: probe.get(k) for k in ("chart", "numeric", "context") if k in probe}
-        if not obs:
+        df = self._last_df
+        if df is None or len(df) == 0:
+            return 0.0, len(batch)
+        # Build a small probe batch from the iteration's df. We sample
+        # at most ``len(batch)`` rows so the cost stays O(replay_batch).
+        try:
+            ds = MarketDataset(df, spec=self.spec)
+            n = min(len(batch), len(ds))
+            if n == 0:
+                return 0.0, len(batch)
+            idxs = list(range(min(len(ds), n)))
+            charts = torch.stack([ds[i]["chart"] for i in idxs]).to(self.cfg.device)
+            numerics = torch.stack([ds[i]["numeric"] for i in idxs]).to(self.cfg.device)
+            contexts = torch.stack([ds[i]["context"] for i in idxs]).to(self.cfg.device)
+        except Exception as e:
+            logger.debug("replay probe dataset build failed: %s", e)
             return 0.0, len(batch)
         self.model.eval()
         with torch.no_grad():
             try:
-                out = self.model(**{
-                    k: torch.as_tensor(v).unsqueeze(0).to(self.cfg.device)
-                    for k, v in obs.items()
-                })
-            except Exception:
+                out = self.model(chart=charts, numeric=numerics, context=contexts)
+            except Exception as e:
+                logger.debug("replay probe forward failed: %s", e)
                 return 0.0, len(batch)
         loss = 0.0
         if "policy_logits" in out:
-            loss += float(F.cross_entropy(
-                out["policy_logits"],
-                torch.zeros(1, dtype=torch.long, device=self.cfg.device),
-            ).item())
+            # Cross-entropy with a uniform (zeros) target as a baseline —
+            # equivalent to a calibration probe on policy distribution.
+            logits = out["policy_logits"]
+            B = logits.size(0)
+            targets = torch.zeros(B, dtype=torch.long, device=logits.device)
+            loss += float(F.cross_entropy(logits, targets).item())
         if "value" in out:
             loss += float(out["value"].abs().mean().item())
         return loss, len(batch)

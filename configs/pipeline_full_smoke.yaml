@@ -1,0 +1,150 @@
+# Full end-to-end ZHISA pipeline (smoke version).
+# Mirrors the 10-stage SMOKE_TEST_REPORT.md + portfolio_rl + backtest + eval + explain.
+# Each stage uses the smallest possible budget so the whole run stays under ~30 min.
+
+seed: 0
+device: cpu
+artifacts_dir: artifacts/pipeline_full
+python: python
+
+stages:
+  # ---- 1. Self-supervised pretraining ----
+  - name: s1_ssl
+    entry: zhisa-train-s1
+    config: configs/s1_ssl.yaml
+    args:
+      bars: 300
+      epochs: 1
+      batch-size: 32
+    output_checkpoint: s1.pt
+    timeout_s: 600
+
+  # ---- 2. Supervised multi-task ----
+  - name: s2_supervised
+    entry: zhisa-train-s2
+    config: configs/s2_supervised.yaml
+    args:
+      bars: 300
+      epochs: 1
+      batch-size: 32
+    output_checkpoint: s2.pt
+    depends_on: [s1_ssl]
+    timeout_s: 600
+
+  # ---- 3. Behaviour-cloning imitation ----
+  - name: s2b_bc
+    entry: zhisa-train-s2b
+    config: configs/s2b_imitation.yaml
+    args:
+      bars: 300
+    output_checkpoint: s2b.pt
+    depends_on: [s1_ssl]
+    timeout_s: 600
+
+  # ---- 4. Curriculum (clean -> stressed) ----
+  - name: s3_curriculum
+    entry: zhisa-train-s3
+    config: configs/s3_smoke.yaml
+    output_checkpoint: s3.pt
+    depends_on: [s1_ssl]
+    timeout_s: 600
+
+  # ---- 5. PPO (online RL) ----
+  - name: s4_ppo
+    entry: zhisa-train-s4
+    config: configs/s4_rl.yaml
+    args:
+      n-episodes: 2
+      max-steps: 30
+    output_checkpoint: s4.pt
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 6. CVaR-PPO (risk-aware RL) ----
+  - name: s4_cvar
+    entry: zhisa-train-s4-cvar
+    config: configs/s4_cvar_ppo.yaml
+    args:
+      iterations: 2
+      episodes: 1
+      max-steps: 20
+    output_checkpoint: s4_cvar.pt
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 7. Online continual (with EWC + drift) ----
+  - name: s5_continual
+    entry: zhisa-train-s5
+    config: configs/s5_smoke.yaml
+    output_checkpoint: s5.pt
+    depends_on: [s1_ssl]
+    timeout_s: 900
+
+  # ---- 8. Decision Transformer (offline RL) ----
+  - name: s6_dt
+    entry: zhisa-train-s6
+    config: configs/s6_dt.yaml
+    args:
+      bars: 300
+      episodes: 2
+      max-steps: 30
+      epochs: 3
+    output_checkpoint: s6.pt
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 9. World Model + Dyna-PPO ----
+  - name: s7_wm
+    entry: zhisa-train-s7
+    config: configs/s7_world_model.yaml
+    args:
+      bars: 300
+      episodes: 2
+      max-steps: 20
+      wm-epochs: 3
+      dyna-rounds: 2
+      horizon: 8
+    output_checkpoint: s7.pt
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 10. Portfolio RL (multi-instrument) ----
+  - name: portfolio_rl
+    entry: zhisa-train-portfolio-rl
+    config: configs/portfolio_rl.yaml
+    args:
+      bars: 300
+      iterations: 2
+      episodes: 2
+      max-steps: 20
+    output_checkpoint: portfolio.pt
+    depends_on: [s2_supervised]
+    timeout_s: 900
+
+  # ---- 11. Backtest (random vs trained policy) ----
+  - name: backtest
+    entry: zhisa-backtest
+    args:
+      bars: 500
+      out: artifacts/pipeline_full/backtest.json
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 12. Evaluate (full metrics bundle) ----
+  - name: evaluate
+    entry: zhisa.scripts.evaluate
+    args:
+      bars: 500
+      out: artifacts/pipeline_full/eval.json
+    depends_on: [s2_supervised]
+    timeout_s: 600
+
+  # ---- 13. Explain (interpretability) ----
+  - name: explain
+    entry: zhisa-explain
+    config: configs/explain_default.yaml
+    args:
+      n-samples: 5
+      out: artifacts/pipeline_full/explain.json
+    depends_on: [s2_supervised]
+    timeout_s: 600
