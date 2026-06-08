@@ -1,0 +1,34 @@
+# S6: Decision Transformer (offline RL via sequence modelling).
+# Train a DT to mimic a base policy's behaviour on synthetic data.
+# The base policy can be replaced with an S2b/S4 checkpoint via
+# ``--base-policy``; if none is provided, a fresh untrained policy is
+# used and trajectories are noisy by design.
+seed: 0
+device: cpu
+bars: 4000
+chart_window: 16
+image_size: 32
+n_regime_states: 4
+n_actions: 9
+embed_dim: 64
+episodes: 4
+max_steps_per_episode: 200
+gamma: 1.0
+context_length: 8
+d_model: 64
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+learning_rate: 0.001
+batch_size: 32
+epochs: 3
+val_frac: 0.0
+rtg_loss_weight: 0.0
+max_rtg_clip: 10.0
+random_base: false
+
+env_cfg:
+  episode_length: 200
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  max_leverage: 3.0

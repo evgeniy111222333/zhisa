@@ -1,0 +1,41 @@
+# S4 PPO reinforcement-learning trainer
+# Trains the policy inside a `TradingEnv` using PPO with GAE(lambda)
+# advantages, clipped surrogate objective, and entropy bonus. The
+# training data is generated on-the-fly from the synthetic market
+# generator (so the env can vary its distribution between iterations).
+
+seed: 0
+device: cpu
+
+# Market / chart config (used to generate fresh OHLCV per iteration).
+chart_window: 32
+image_size: 32
+n_bars: 1500   # per training iteration
+
+# PPO hyperparameters.
+n_episodes: 4
+max_steps_per_episode: 200
+n_epochs: 4
+minibatch_size: 32
+clip_ratio: 0.2
+value_coef: 0.5
+entropy_coef: 0.01
+gamma: 0.99
+gae_lambda: 0.95
+grad_clip: 1.0
+target_kl: 0.05
+
+# Optimiser (AdamW with weight decay grouping).
+optim:
+  lr: 0.0003
+  weight_decay: 0.01
+  warmup_steps: 0
+
+# Trading environment overrides (everything else uses EnvConfig defaults).
+env_cfg:
+  window: 32
+  image_size: 32
+  initial_cash: 10000.0
+  fee_bps: 5.0
+  slippage_bps: 2.0
+  episode_length: 200

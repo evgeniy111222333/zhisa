@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zhisa"
+version = "0.1.0"
+description = "ZHISA: visual-adaptive multimodal self-learning trading AI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "ZHISA"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.2",
+    "gymnasium>=0.29",
+    "optuna>=4.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-benchmark>=4.0",
+    "pytest-cov>=4.1",
+]
+all = ["zhisa[ml,dev]"]
+
+[project.scripts]
+zhisa-train-s1 = "zhisa.scripts.train_s1:main"
+zhisa-train-s2 = "zhisa.scripts.train_s2:main"
+zhisa-train-s2b = "zhisa.scripts.train_s2b:main"
+zhisa-train-s3 = "zhisa.scripts.train_s3:main"
+zhisa-train-s4 = "zhisa.scripts.train_s4:main"
+zhisa-train-s4-cvar = "zhisa.scripts.train_s4_cvar:main"
+zhisa-train-s5 = "zhisa.scripts.train_s5:main"
+zhisa-train-s6 = "zhisa.scripts.train_s6:main"
+zhisa-train-s7 = "zhisa.scripts.train_s7:main"
+zhisa-train-portfolio-rl = "zhisa.scripts.train_portfolio_rl:main"
+zhisa-hpopt = "zhisa.scripts.hpopt:main"
+zhisa-explain = "zhisa.scripts.explain:main"
+zhisa-run-pipeline = "zhisa.scripts.run_pipeline:main"
+zhisa-eval = "zhisa.scripts.evaluate:main"
+zhisa-backtest = "zhisa.scripts.backtest:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"zhisa" = ["configs/*.yaml"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: slow tests",
+    "benchmark: benchmark tests",
+    "integration: integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["zhisa"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

@@ -1,0 +1,138 @@
+"""Train a policy through the S4 PPO loop on a synthetic market.
+
+By default this runs ``n_episodes`` short trading episodes against a
+fresh OHLCV stream generated on every iteration by
+:func:`generate_market`. The model's feature dimensionality is
+auto-probed from a :class:`MarketDataset` and passed to
+:func:`build_default_policy`.
+
+Usage::
+
+    python -m zhisa.scripts.train_s4 --config configs/s4_rl.yaml
+    python -m zhisa.scripts.train_s4 --config configs/s4_rl.yaml \\
+        --n-episodes 10 --max-steps 500
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from zhisa.config import load_config
+from zhisa.data.dataset import MarketDataset, SampleSpec
+from zhisa.data.synthetic import MarketConfig, generate_market
+from zhisa.env.trading_env import EnvConfig
+from zhisa.models.policy import build_default_policy
+from zhisa.training.optim import OptimConfig
+from zhisa.training.s4_rl import PPOConfig, PPOTrainer
+from zhisa.utils.seeding import set_seed
+
+
+def _default_device() -> str:
+    """Resolve a sensible default device from env (GPU when available)."""
+    import os
+    import torch
+    pref = os.environ.get("ZHISA_TEST_DEVICE", "auto").lower()
+    if pref in {"cpu", "cuda"}:
+        return pref
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+
+
+def _build_env_cfg(cfg) -> EnvConfig:
+    """Return an :class:`EnvConfig` with YAML overrides applied on top."""
+    overrides = (cfg.get("env_cfg", {}) if cfg else {}) or {}
+    base = EnvConfig()
+    valid = {f for f in base.__dataclass_fields__}
+    kwargs = {k: v for k, v in overrides.items() if k in valid}
+    return EnvConfig(**kwargs)
+
+
+def _build_ppo_cfg(cfg, args, env_cfg: EnvConfig) -> PPOConfig:
+    """Resolve all CLI/config knobs into a :class:`PPOConfig`."""
+    def opt(key, default):
+        return cfg.get(key, default) if cfg else default
+
+    optim_overrides = opt("optim", {}) or {}
+    return PPOConfig(
+        n_episodes=int(args.n_episodes if args.n_episodes is not None
+                       else opt("n_episodes", 4)),
+        max_steps_per_episode=int(args.max_steps if args.max_steps is not None
+                                  else opt("max_steps_per_episode", 200)),
+        n_epochs=int(opt("n_epochs", 4)),
+        minibatch_size=int(opt("minibatch_size", 32)),
+        clip_ratio=float(opt("clip_ratio", 0.2)),
+        value_coef=float(opt("value_coef", 0.5)),
+        entropy_coef=float(opt("entropy_coef", 0.01)),
+        gamma=float(opt("gamma", 0.99)),
+        gae_lambda=float(opt("gae_lambda", 0.95)),
+        grad_clip=float(opt("grad_clip", 1.0)),
+        target_kl=float(opt("target_kl", 0.05)),
+        device=str(opt("device", _default_device())),
+        optim=OptimConfig(
+            lr=float(optim_overrides.get("lr", 3e-4)),
+            weight_decay=float(optim_overrides.get("weight_decay", 1e-2)),
+            warmup_steps=int(optim_overrides.get("warmup_steps", 0)),
+        ),
+        env_cfg=env_cfg,
+        seed=int(opt("seed", 0)),
+        log_every=int(opt("log_every", 1)),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Train S4 PPO policy.")
+    parser.add_argument("--config", type=str, default="configs/s4_rl.yaml")
+    parser.add_argument("--n-episodes", type=int, default=None)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--checkpoint", type=str, default="artifacts/s4/policy.pt")
+    args = parser.parse_args(argv)
+
+    cfg_path = Path(args.config)
+    cfg = load_config(cfg_path) if cfg_path.exists() else None
+    seed = int(cfg.get("seed", 0)) if cfg else 0
+    set_seed(seed)
+
+    chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
+    image_size = int(cfg.get("image_size", 32)) if cfg else 32
+    n_bars = int(cfg.get("n_bars", 1500)) if cfg else 1500
+
+    spec = SampleSpec(chart_window=chart_window, feature_window=chart_window,
+                      image_size=image_size)
+
+    # Probe feature dim with a tiny market.
+    probe_df = generate_market(MarketConfig(n_bars=300, seed=seed))
+    probe_ds = MarketDataset(probe_df, spec=spec)
+    n_feat = probe_ds._features.shape[1] + probe_ds._time_features.shape[1]
+    n_ctx = probe_ds._time_features.shape[1]
+
+    model = build_default_policy(
+        in_numeric_features=n_feat, in_context_features=n_ctx,
+        window=spec.chart_window, image_size=spec.image_size,
+        n_actions=9, n_regime_classes=spec.n_regime_states,
+    )
+
+    env_cfg = _build_env_cfg(cfg)
+    ppo_cfg = _build_ppo_cfg(cfg, args, env_cfg)
+
+    # Fresh market per training run.
+    df = generate_market(MarketConfig(n_bars=n_bars, seed=seed))
+
+    trainer = PPOTrainer(model, ppo_cfg)
+    result = trainer.fit(df)
+    Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
+    trainer.save(args.checkpoint)
+
+    print("S4 PPO training complete.")
+    history = result["history"]
+    if history:
+        last = history[-1]
+        print(f"final episode: return={last.get('episode_return', 0.0):.4f} "
+              f"steps={last.get('steps', 0)}")
+    print(f"checkpoint saved to: {args.checkpoint}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

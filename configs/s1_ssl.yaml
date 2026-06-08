@@ -1,0 +1,33 @@
+# S1 self-supervised pretraining
+# Trains a multimodal encoder without labels via:
+#   - temporal contrastive (CPC, with EMA teacher)
+#   - masked numeric modeling
+#   - cross-modal vision-numeric alignment
+# Output: a checkpoint that S2 can load to start from a richer init.
+
+seed: 0
+device: cpu
+epochs: 2
+batch_size: 32
+chart_window: 32
+image_size: 32
+
+optim:
+  lr: 0.0003
+  weight_decay: 0.0001
+
+ssl:
+  projection_dim: 64
+  hidden_dim: 128
+  temperature: 0.1
+  mask_ratio: 0.4
+  ema_decay: 0.996
+  weight_temporal: 1.0
+  weight_masked: 1.0
+  weight_alignment: 0.5
+  grad_clip: 1.0
+  log_every: 50
+  use_ema_teacher: true
+  use_masked_modeling: true
+  use_temporal_contrast: true
+  use_cross_modal: true

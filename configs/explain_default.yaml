@@ -1,0 +1,11 @@
+# Default config for zhisa-explain
+# (loaded by zhisa.scripts.explain when --config is not passed).
+
+seed: 0
+device: cpu
+
+bars: 200
+chart_window: 8
+image_size: 16
+n_regime_states: 4
+n_actions: 9

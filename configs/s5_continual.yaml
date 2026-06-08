@@ -1,0 +1,35 @@
+# S5 online continual learning
+# Wires an inner trainer (S1/S2/S3/S4) into a long-running
+# online loop that uses a reservoir replay buffer, an EWC
+# regulariser, and a Page-Hinkley drift detector to avoid
+# catastrophic forgetting and to detect regime changes.
+
+seed: 0
+device: cpu
+
+# Top-level loop.
+n_iterations: 3
+bars_per_iter: 400
+
+# Replay buffer (reservoir sampling).
+replay_capacity: 64
+replay_batch_size: 8
+
+# EWC (Elastic Weight Consolidation).
+ewc_lambda: 1.0
+ewc_lambda_on_drift: 10.0
+
+# Concept-drift detector (Page-Hinkley).
+drift_threshold: 5.0
+drift_alpha: 0.01
+drift_warmup: 3
+
+# Inner-trainer defaults.
+inner_kind: s1   # "s1" (SSL) or "s4" (PPO) or "s2" (supervised)
+inner_epochs: 1
+inner_batch_size: 8
+inner_lr: 0.0003
+
+# Chart / numeric feature probe.
+chart_window: 16
+image_size: 16

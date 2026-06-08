@@ -1,0 +1,27 @@
+# S3 curriculum training
+# Trains a model through progressively harder synthetic market regimes
+# (clean -> mixed -> stressed). The inner trainer can be S1 (SSL) or S2
+# (supervised) — see the --inner flag in scripts/train_s3.py.
+
+seed: 0
+device: cpu
+chart_window: 32
+image_size: 32
+
+# Which inner trainer to use: "s1" (SSL pretraining) or "s2" (supervised).
+inner: s1
+
+# Per-stage bars: length of synthetic data generated for each stage.
+# A typical curriculum:
+#   clean:    low vol, no shocks, near-Gaussian returns
+#   mixed:    moderate vol, light shocks, fatter tails
+#   stressed: high vol, frequent shocks, very fat tails (df=4)
+stages:
+  - { name: clean,    n_bars: 2000, base_vol: 0.40, shock_prob: 0.0,   student_t_df: 20.0, epochs: 1, mix_with_previous: 0.0 }
+  - { name: mixed,    n_bars: 2000, base_vol: 0.60, shock_prob: 0.0005, student_t_df: 8.0,  epochs: 1, mix_with_previous: 0.2 }
+  - { name: stressed, n_bars: 2000, base_vol: 0.90, shock_prob: 0.002,  student_t_df: 4.0,  epochs: 1, mix_with_previous: 0.2 }
+
+# Inner-trainer defaults (used by S1 or S2 factory).
+inner_batch_size: 32
+inner_lr: 0.0003
+inner_log_every: 50

@@ -1,0 +1,54 @@
+"""Multi-task heads: direction, volatility, regime, risk, policy, value."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+@dataclass
+class HeadsConfig:
+    embed_dim: int = 128
+    n_direction_classes: int = 3   # -1, 0, +1
+    n_regime_classes: int = 4
+    n_actions: int = 9             # discrete actions
+    hidden_dim: int = 128
+    dropout: float = 0.1
+
+
+class MultiTaskHeads(nn.Module):
+    """A set of heads that share the trunk embedding."""
+
+    def __init__(self, cfg: Optional[HeadsConfig] = None) -> None:
+        super().__init__()
+        cfg = cfg or HeadsConfig()
+        self.cfg = cfg
+        self.shared = nn.Sequential(
+            nn.Linear(cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Dropout(cfg.dropout),
+        )
+        self.direction = nn.Linear(cfg.hidden_dim, cfg.n_direction_classes)
+        self.regime = nn.Linear(cfg.hidden_dim, cfg.n_regime_classes)
+        self.volatility = nn.Linear(cfg.hidden_dim, 1)
+        self.risk = nn.Linear(cfg.hidden_dim, 1)
+        self.return_pred = nn.Linear(cfg.hidden_dim, 1)
+        self.policy_logits = nn.Linear(cfg.hidden_dim, cfg.n_actions)
+        self.value = nn.Linear(cfg.hidden_dim, 1)
+        self.uncertainty_logit = nn.Linear(cfg.hidden_dim, 1)
+
+    def forward(self, z: torch.Tensor) -> dict:
+        h = self.shared(z)
+        return {
+            "direction": self.direction(h),
+            "regime": self.regime(h),
+            "volatility": self.volatility(h).squeeze(-1),
+            "risk": self.risk(h).squeeze(-1),
+            "return_pred": self.return_pred(h).squeeze(-1),
+            "policy_logits": self.policy_logits(h),
+            "value": self.value(h).squeeze(-1),
+            "uncertainty_logit": self.uncertainty_logit(h).squeeze(-1),
+        }

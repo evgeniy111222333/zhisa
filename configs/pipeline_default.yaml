@@ -1,0 +1,41 @@
+# Default end-to-end pipeline.
+# This is a *smoke* version with minimal bars / episodes per stage,
+# intended to validate the orchestrator wiring in tests and CI.
+# For a production run, scale up the per-stage budgets.
+
+seed: 0
+device: cpu
+artifacts_dir: artifacts/pipeline_smoke
+python: python
+
+stages:
+  - name: s1_ssl
+    entry: zhisa-train-s1
+    config: configs/s1_ssl.yaml
+    args:
+      bars: 300
+      epochs: 1
+      batch_size: 32
+    output_checkpoint: s1.pt
+
+  - name: s2_supervised
+    entry: zhisa-train-s2
+    config: configs/s2_supervised.yaml
+    args:
+      bars: 300
+      epochs: 1
+      batch-size: 32
+    output_checkpoint: s2.pt
+    depends_on:
+      - s1_ssl
+
+  - name: s2b_bc
+    entry: zhisa-train-s2b
+    config: configs/s2b_imitation.yaml
+    args:
+      bars: 300
+      bc_epochs: 1
+      batch_size: 32
+    output_checkpoint: s2b.pt
+    depends_on:
+      - s1_ssl

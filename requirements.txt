@@ -1,0 +1,16 @@
+# Core scientific
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+matplotlib>=3.8
+pyyaml>=6.0
+tqdm>=4.66
+
+# ML
+torch>=2.2
+gymnasium>=0.29
+
+# Dev / test
+pytest>=8.0
+pytest-benchmark>=4.0
+pytest-cov>=4.1

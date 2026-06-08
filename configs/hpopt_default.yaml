@@ -1,0 +1,25 @@
+# Default config for the Optuna hyperparameter search
+# (used when --config is not passed and the trainer has no default)
+
+seed: 0
+device: cpu
+
+# Generic budget knobs forwarded into the objective. Each trainer
+# only consumes a subset of these.
+n_bars: 2000
+n_episodes: 2
+max_steps_per_episode: 200
+
+# Number of trials / time limit.
+n_trials: 10
+timeout_s: null
+
+# Optuna knobs.
+sampler: tpe         # "tpe" or "random"
+pruner: none         # "none", "median", "hyperband"
+
+# Storage (omit to use in-memory). Useful for resuming long runs.
+storage: null
+
+# Optional override of the search-space name.
+space: null

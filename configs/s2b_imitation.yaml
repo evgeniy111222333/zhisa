@@ -1,0 +1,62 @@
+# S2b imitation learning (BC + DAgger)
+# Trains the policy via supervised behavioral cloning on a rule-based
+# expert's actions, then optionally aggregates on-policy data with
+# DAgger to combat covariate shift. The resulting checkpoint is a
+# valid init for the S4 PPO trainer.
+#
+#   trainer: bc       -> standard BC only
+#   trainer: dagger   -> BC warmup + rounds of rollout + aggregate + retrain
+#   expert:  triple_barrier (uses forward-looking barriers, strongest signal)
+#            momentum       (backward-looking, no leakage)
+#            sma_cross      (backward-looking, no leakage)
+
+seed: 0
+device: cpu
+trainer: bc           # "bc" or "dagger"
+expert: triple_barrier
+
+# Market
+bars: 4000
+chart_window: 32
+image_size: 32
+n_regime_states: 4
+
+# BC / DAgger hyperparameters
+batch_size: 32
+grad_clip: 1.0
+log_every: 50
+bc_epochs: 3
+dagger_rounds: 3
+epochs_per_round: 1
+rollout_episodes_per_round: 2
+max_steps_per_episode: 200
+
+# Optimiser (AdamW with weight-decay grouping).
+optim:
+  lr: 0.0003
+  weight_decay: 0.01
+  scheduler: cosine
+  warmup_steps: 0
+
+# Multi-task loss weights. The ``policy`` term dominates during BC.
+loss_weights:
+  direction: 1.0
+  volatility: 0.5
+  regime: 0.3
+  return_pred: 0.5
+  policy: 1.0
+  value: 0.5
+  uncertainty: 0.05
+
+# Expert-specific kwargs (forwarded to build_expert).
+expert_kwargs: {}
+
+# Env overrides used by the DAgger rollouts. The window/image_size
+# fields are auto-synced with the dataset at runtime.
+env_cfg:
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  market_depth_units: 100.0
+  max_leverage: 3.0
+  episode_length: 200
+  kill_on_drawdown: true

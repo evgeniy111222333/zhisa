@@ -1,0 +1,39 @@
+# S7: World Model + Dyna-style PPO (imagination rollouts).
+# Trains a GRU-based world model on real trajectories, then uses it
+# to generate imagined rollouts for a LatentActorCritic trained with
+# PPO in pure imagination (no real-env interaction during PPO).
+seed: 0
+device: cpu
+bars: 4000
+chart_window: 16
+image_size: 32
+n_regime_states: 4
+n_actions: 9
+episodes: 4
+max_steps_per_episode: 200
+random_base: false
+
+# World-model architecture + training
+dynamics_hidden: 128
+dynamics_layers: 1
+wm_learning_rate: 0.001
+wm_batch_size: 64
+wm_epochs: 3
+
+# Dyna PPO config
+ac_hidden: 64
+ac_layers: 1
+dyna_horizon: 16
+dyna_rollouts: 32
+dyna_rounds: 2
+dyna_learning_rate: 0.0003
+dyna_gamma: 0.99
+ppo_epochs: 4
+ppo_minibatch_size: 32
+initial_pool_size: 64
+
+env_cfg:
+  episode_length: 200
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  max_leverage: 3.0

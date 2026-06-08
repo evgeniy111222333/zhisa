@@ -1,0 +1,7 @@
+# Backtest config
+bars: 2000
+seed: 0
+window: 32
+image_size: 32
+fee_bps: 4.0
+slippage_bps_per_unit: 1.5

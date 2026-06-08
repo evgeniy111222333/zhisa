@@ -1,0 +1,40 @@
+# Stage-1 portfolio reinforcement learning config.
+# Used by `python -m zhisa.scripts.train_portfolio_rl --config configs/portfolio_rl.yaml`
+
+seed: 0
+bars: 300          # synthetic bars per instrument (CLI override: --bars)
+n_instruments: 2
+
+env_cfg:
+  window: 16
+  image_size: 32
+  episode_length: 30
+
+portfolio_cfg:
+  # instrument_names is auto-generated when omitted.
+  gross_leverage_cap: 1.0
+
+model:
+  window: 16
+  image_size: 32
+  embed_dim: 32
+  fusion_hidden: 32
+
+ppo:
+  iterations: 2
+  episodes: 2
+  max_steps: 30
+  epochs: 1
+  minibatch_size: 16
+  learning_rate: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_ratio: 0.2
+  value_loss_coef: 0.5
+  entropy_coef: 0.01
+  max_grad_norm: 0.5
+  log_every: 1
+  device: cpu
+
+checkpoint: artifacts/portfolio_rl.pt
+history: artifacts/portfolio_rl_history.json

@@ -1,0 +1,59 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache
+.pytest_benchmark/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project artefacts
+artifacts/
+checkpoints/
+logs/
+data/raw/
+data/processed/
+data/cache/
+*.parquet
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.png
+!docs/**/*.png
+!README.md
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Local config
+.env
+.env.local
+*.local.yaml
+secrets.*

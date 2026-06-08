@@ -1,0 +1,11 @@
+# Default project config
+project:
+  name: zhisa
+  seed: 0
+  device: cpu
+
+data:
+  kind: synthetic
+  bars: 8000
+  freq: 5min
+  cache: true
