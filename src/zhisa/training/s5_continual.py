@@ -481,6 +481,18 @@ class OnlineContinualTrainer:
         inner = self.inner_factory(self.model)
         inner_loss = self._run_inner(inner, df)
 
+        # Populate the replay buffer with samples drawn from the
+        # current iteration's data. Without this step the buffer
+        # stays empty, every replay probe returns (0.0, 0), and the
+        # EWC regulariser never sees a non-zero penalty. We add
+        # ``bars_per_iter`` transitions (one per bar, with the
+        # last-close and the realised step reward as features) so
+        # the buffer fills up at the same rate the inner trainer
+        # consumes bars. The exact shape of the sample is
+        # intentionally light-weight: only the fields actually used
+        # downstream are populated.
+        self._populate_replay_from_df(df)
+
         # Replay update.
         replay_loss, n_replay = self._replay_step()
 
@@ -508,6 +520,30 @@ class OnlineContinualTrainer:
             ewc_lambda=float(self.ewc.ewc_lambda),
         )
         return step
+
+    def _populate_replay_from_df(self, df: pd.DataFrame) -> None:
+        """Add a batch of bar-level transitions to the replay buffer.
+
+        Each transition carries the close-price, the bar's index
+        position, and a zero reward (the inner trainer is responsible
+        for the actual PnL signal — we only want the *existence* of
+        the data point for EWC + drift detection). The chart/numeric/
+        context fields are optional and only filled in if the buffer's
+        downstream consumer (``_replay_step``) needs them.
+        """
+        n = int(self.cfg.bars_per_iter)
+        if n <= 0 or len(df) == 0:
+            return
+        # Down-sample to ``n`` evenly-spaced indices.
+        idx = np.linspace(0, len(df) - 1, num=min(n, len(df)), dtype=int)
+        closes = df["close"].to_numpy(dtype=np.float64)
+        for i in idx:
+            t = {
+                "reward": 0.0,
+                "bar_idx": int(i),
+                "close": float(closes[i]) if i < len(closes) else 0.0,
+            }
+            self.replay.add(ReplaySample(data=t))
 
     def _run_inner(self, inner: Any, df: pd.DataFrame) -> float:
         """Run ``cfg.inner_epochs`` epochs through the inner trainer.

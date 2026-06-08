@@ -1,0 +1,24 @@
+# S5 online continual learning — TINY smoke version
+seed: 0
+device: cpu
+
+n_iterations: 2
+bars_per_iter: 200
+
+replay_capacity: 32
+replay_batch_size: 4
+
+ewc_lambda: 1.0
+ewc_lambda_on_drift: 10.0
+
+drift_threshold: 5.0
+drift_alpha: 0.01
+drift_warmup: 3
+
+inner_kind: s1
+inner_epochs: 1
+inner_batch_size: 8
+inner_lr: 0.0003
+
+chart_window: 16
+image_size: 16

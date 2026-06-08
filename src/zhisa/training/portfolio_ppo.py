@@ -427,9 +427,13 @@ class PortfolioPPOTrainer:
     def save(self, path: str) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        cfg_dict = self.model.cfg.__dict__.copy()
+        if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
+            cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
         torch.save({
             "model": self.model.state_dict(),
-            "config": self.model.cfg.__dict__,
+            "config": cfg_dict,
+            "model_config": cfg_dict,  # canonical name
             "ppo_config": self.cfg.__dict__,
             "history": self.history,
         }, p)

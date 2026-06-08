@@ -216,14 +216,30 @@ class WorldModelTrainer:
             val = self._eval(val_dataset) if (val_dataset is not None and len(val_dataset) > 0) else {
                 "state_mse": float("nan"), "reward_mse": float("nan"), "done_bce": float("nan")
             }
+            # Guard: if the val set produced non-finite metrics (e.g.
+            # empty after the split, or all-NaN due to a degenerate
+            # batch), fall back to the train metrics for logging so
+            # the operator sees a real number rather than NaN.
+            val_log = dict(val)
+            for k in ("state_mse", "reward_mse", "done_bce"):
+                v = val_log[k]
+                if v != v:  # NaN
+                    if not getattr(self, "_val_warned", False):
+                        self.logger.warning(
+                            "WorldModel: val_%s is NaN (empty val set?); "
+                            "falling back to train_%s for logging (epoch %d)",
+                            k, k, epoch,
+                        )
+                        self._val_warned = True
+                    val_log[k] = mean.get(k, 0.0)
             entry = {**{f"train_{k}": v for k, v in mean.items()},
-                     **{f"val_{k}": v for k, v in val.items()}, "epoch": epoch}
+                     **{f"val_{k}": v for k, v in val_log.items()}, "epoch": epoch}
             self.history.append(entry)
             if self.cfg.verbose and (epoch % max(1, self.cfg.log_every) == 0):
                 self.logger.info(
                     "epoch=%d loss=%.4f state_mse=%.4f reward_mse=%.4f done_bce=%.4f val_state_mse=%.4f",
                     epoch, mean["loss"], mean["state_mse"], mean["reward_mse"],
-                    mean["done_bce"], val["state_mse"],
+                    mean["done_bce"], val_log["state_mse"],
                 )
         result.history = list(self.history)
         if self.history:

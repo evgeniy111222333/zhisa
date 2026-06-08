@@ -435,13 +435,17 @@ class SSLPretrainer:
     def save(self, path: str) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        cfg_dict = self.model.cfg.__dict__.copy()
+        if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
+            cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
         payload = {
             "model": self.model.state_dict(),
             "proj_temporal": self.proj_temporal.state_dict(),
             "proj_vision": self.proj_vision.state_dict(),
             "proj_numeric": self.proj_numeric.state_dict(),
             "reconstructor": self.reconstructor.state_dict(),
-            "config": self.model.cfg.__dict__,
+            "config": cfg_dict,
+            "model_config": cfg_dict,  # canonical name
             "ssl_config": self.cfg.__dict__,
         }
         if self.teacher is not None:

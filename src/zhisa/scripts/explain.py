@@ -48,30 +48,74 @@ def _default_device() -> str:
 
 
 def _load_model(checkpoint: str | None, cfg: dict[str, Any], device: str) -> PolicyNetwork:
-    """Build a policy from a config dict and (optionally) load weights."""
+    """Build a policy from a config dict and (optionally) load weights.
+
+    If the checkpoint was produced by S2/S2b/S3/S4 (i.e. it contains a
+    ``model_config`` block with the full :class:`PolicyConfig`), we use
+    that config to rebuild the model with identical hyperparameters.
+    Otherwise we fall back to the YAML config in ``cfg``.
+    """
+    payload = None
+    if checkpoint and Path(checkpoint).exists():
+        try:
+            payload = __import__("torch").load(
+                checkpoint, map_location=device, weights_only=False,
+            )
+        except Exception as exc:
+            _LOG.warning("failed to read checkpoint %s: %s", checkpoint, exc)
+            payload = None
+
+    # Prefer the model's own saved config (avoids the size-mismatch
+    # bug where chart_window / image_size / n_features differ between
+    # the training run and the explain YAML).
+    saved_cfg = None
+    if payload is not None and isinstance(payload, dict):
+        saved_cfg = payload.get("model_config") or payload.get("config")
+        # The legacy ``config`` field was the loss module's config in
+        # some trainers — we only honour it if it looks like a
+        # PolicyConfig (has ``window`` and ``in_numeric_features``).
+        if saved_cfg is not None and not (
+            "window" in saved_cfg and "in_numeric_features" in saved_cfg
+        ):
+            saved_cfg = None
+
+    chart_window = int(
+        (saved_cfg or {}).get("window") or cfg.get("chart_window", 32)
+    )
+    image_size = int(
+        (saved_cfg or {}).get("image_size") or cfg.get("image_size", 32)
+    )
+    n_actions = int(
+        (saved_cfg or {}).get("n_actions") or cfg.get("n_actions", 9)
+    )
+    n_regime_classes = int(
+        (saved_cfg or {}).get("n_regime_classes")
+        or cfg.get("n_regime_states", 4)
+    )
+    in_numeric_features = (saved_cfg or {}).get("in_numeric_features")
+    in_context_features = (saved_cfg or {}).get("in_context_features")
+
     spec = SampleSpec(
-        chart_window=int(cfg.get("chart_window", 32)),
-        feature_window=int(cfg.get("chart_window", 32)),
-        image_size=int(cfg.get("image_size", 32)),
-        n_regime_states=int(cfg.get("n_regime_states", 4)),
+        chart_window=chart_window,
+        feature_window=chart_window,
+        image_size=image_size,
+        n_regime_states=n_regime_classes,
     )
     df = generate_market(MarketConfig(n_bars=int(cfg.get("bars", 600))))
     ds = MarketDataset(df, spec=spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
-    n_ctx = ds._time_features.shape[1]
+    n_feat = in_numeric_features or (ds._features.shape[1] + ds._time_features.shape[1])
+    n_ctx = in_context_features or ds._time_features.shape[1]
     model = build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,
-        window=spec.chart_window, image_size=spec.image_size,
-        n_actions=int(cfg.get("n_actions", 9)),
-        n_regime_classes=spec.n_regime_states,
+        window=chart_window, image_size=image_size,
+        n_actions=n_actions,
+        n_regime_classes=n_regime_classes,
     )
-    if checkpoint and Path(checkpoint).exists():
-        payload = __import__("torch").load(checkpoint, map_location=device, weights_only=False)
-        if "model" in payload:
-            try:
-                model.load_state_dict(payload["model"], strict=False)
-            except Exception as exc:
-                _LOG.warning("could not load checkpoint strictly: %s", exc)
+    if payload is not None and "model" in payload:
+        try:
+            model.load_state_dict(payload["model"], strict=False)
+        except Exception as exc:
+            _LOG.warning("could not load checkpoint strictly: %s", exc)
     model.eval()
     return model
 
@@ -121,11 +165,19 @@ def main(argv: list[str] | None = None) -> int:
 
     model = _load_model(args.checkpoint, cfg, device)
     n_bars = int(cfg.get("bars", 600))
+    # Reuse the same window/image_size that the loaded model was
+    # built with (so the samples match the encoder's expected shape).
+    model_cfg = getattr(getattr(model, "cfg", None), "__dict__", {}) or {}
+    chart_window = int(model_cfg.get("window") or cfg.get("chart_window", 32))
+    image_size = int(model_cfg.get("image_size") or cfg.get("image_size", 32))
+    n_regime_states = int(
+        model_cfg.get("n_regime_classes") or cfg.get("n_regime_states", 4)
+    )
     spec = SampleSpec(
-        chart_window=int(cfg.get("chart_window", 32)),
-        feature_window=int(cfg.get("chart_window", 32)),
-        image_size=int(cfg.get("image_size", 32)),
-        n_regime_states=int(cfg.get("n_regime_states", 4)),
+        chart_window=chart_window,
+        feature_window=chart_window,
+        image_size=image_size,
+        n_regime_states=n_regime_states,
     )
     df = generate_market(MarketConfig(n_bars=n_bars, seed=seed))
     ds = MarketDataset(df, spec=spec)

@@ -373,8 +373,12 @@ class CurriculumTrainer:
         from dataclasses import asdict
         p = Path(self.checkpoint)
         p.parent.mkdir(parents=True, exist_ok=True)
+        cfg_dict = self.model.cfg.__dict__.copy()
+        if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
+            cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
         torch.save({
             "model": self.model.state_dict(),
+            "model_config": cfg_dict,  # canonical name
             "stages": [asdict(s) for s in self.stages],
         }, p)
         logger.info("curriculum checkpoint saved to %s", p)

@@ -296,6 +296,18 @@ class DecisionTransformerTrainer:
             val_loss = (
                 self._eval_loss(val_dataset) if val_dataset is not None else float("nan")
             )
+            # Guard: if the val set is empty (or all batches produced
+            # non-finite loss), fall back to the training loss and
+            # emit a one-time warning so the operator can see that the
+            # reported val_loss is actually the train loss.
+            if val_loss != val_loss:  # NaN
+                if not getattr(self, "_val_warned", False):
+                    self.logger.warning(
+                        "DT: val set is empty or all-NaN; falling back to train_loss "
+                        "for val_loss reporting (epoch %d)", epoch,
+                    )
+                    self._val_warned = True
+                val_loss = mean_loss
             entry = {"epoch": epoch, "loss": mean_loss, "val_loss": val_loss}
             self.history.append(entry)
             if self.cfg.verbose and (epoch % max(1, self.cfg.log_every) == 0):

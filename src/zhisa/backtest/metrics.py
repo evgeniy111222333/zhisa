@@ -126,7 +126,15 @@ def compute_metrics(
         win_rate = float(wins.size / trade_returns.size)
         gross_profit = float(wins.sum())
         gross_loss = float(-losses.sum())
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        if gross_loss > 0:
+            profit_factor = gross_profit / gross_loss
+        elif gross_profit > 0:
+            # All winners, no losers: report a large finite number
+            # (a multiple of the average winner) instead of inf so
+            # downstream tools (e.g. JSON serialisation) don't choke.
+            profit_factor = float(gross_profit / max(trade_returns.size, 1) * 1e3)
+        else:
+            profit_factor = 0.0
         avg_trade = float(trade_returns.mean())
         n_trades = int(trade_returns.size)
     else:

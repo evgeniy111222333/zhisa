@@ -151,9 +151,20 @@ class SupervisedTrainer:
     def save(self, path: str) -> None:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        # Convert the config to a fully-JSON-serialisable dict. The
+        # ``vision_channels`` field is a tuple, which torch.save will
+        # happily pickle but json.dumps will not. We also store the
+        # ``PolicyConfig`` as a dict under ``model_config`` so downstream
+        # tools (explain, backtest, evaluate) can rebuild an identical
+        # model without re-deriving the hyperparameters from the YAML.
+        cfg_dict = self.model.cfg.__dict__.copy()
+        if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
+            cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
         torch.save({
             "model": self.model.state_dict(),
             "loss": self.loss.state_dict(),
-            "config": self.model.cfg.__dict__,
+            "config": cfg_dict,
+            "model_config": cfg_dict,  # canonical name
+            "train_config": self.cfg.__dict__,
         }, p)
         logger.info("checkpoint saved to %s", p)
