@@ -25,7 +25,7 @@ def _make_model(df: pd.DataFrame, window: int = 16, image_size: int = 32):
     spec = SampleSpec(chart_window=window, feature_window=window,
                       image_size=image_size, n_regime_states=4)
     probe = MarketDataset(df, spec=spec)
-    n_feat = probe._features.shape[1] + probe._time_features.shape[1]
+    n_feat = probe._features.shape[1]
     n_ctx = probe._time_features.shape[1]
     return build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,

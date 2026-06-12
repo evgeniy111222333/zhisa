@@ -48,7 +48,7 @@ def small_spec():
 @pytest.fixture
 def ppo_model(small_df, small_spec):
     ds = MarketDataset(small_df, spec=small_spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
     n_ctx = ds._time_features.shape[1]
     return build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,
@@ -410,7 +410,7 @@ def test_ppo_select_action_falls_back_on_nan_logits(ppo_model):
         return out
     ppo_model.forward = nan_forward
     try:
-        action, logp, value, entropy = trainer._select_action(obs)
+        action, logp, value, entropy, _ = trainer._select_action(obs)
     finally:
         ppo_model.forward = original_forward
     assert 0 <= action < ppo_model.cfg.n_actions
@@ -435,7 +435,7 @@ def test_ppo_is_deterministic_under_seed(small_df, small_spec, small_env_cfg):
     def run_once():
         torch.manual_seed(123)
         ds = MarketDataset(small_df, spec=small_spec)
-        n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+        n_feat = ds._features.shape[1]
         n_ctx = ds._time_features.shape[1]
         model = build_default_policy(
             in_numeric_features=n_feat, in_context_features=n_ctx,

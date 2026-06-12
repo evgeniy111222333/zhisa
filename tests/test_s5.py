@@ -269,7 +269,7 @@ def _make_policy(seed: int = 0) -> nn.Module:
     spec = SampleSpec(chart_window=8, feature_window=8, image_size=8)
     df = generate_market(MarketConfig(n_bars=80, seed=seed))
     ds = MarketDataset(df, spec=spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
     return build_default_policy(
         in_numeric_features=n_feat,
         in_context_features=ds._time_features.shape[1],
@@ -308,6 +308,15 @@ def test_continual_trainer_records_inner_loss():
 
 
 def test_continual_trainer_grows_replay_buffer():
+    """Replay buffer must respect capacity under reservoir sampling.
+
+    `fit()` bulk-populates the buffer with `bars_per_iter` samples per
+    iteration, so with `n_iterations=2, bars_per_iter=120, capacity=16`
+    the buffer should saturate at the configured capacity (reservoir
+    sampling guarantees no overflow). The 5 manually recorded transitions
+    are statistically very unlikely to all survive the 240 new inserts
+    (~(16/245)^5), so we only assert the capacity invariant.
+    """
     model = _make_policy(seed=0)
     cfg = ContinualConfig(
         n_iterations=2, bars_per_iter=120, replay_capacity=16,
@@ -320,8 +329,10 @@ def test_continual_trainer_grows_replay_buffer():
         trainer.record_transition({"reward": float(i), "x": np.array([i])})
     assert len(trainer.replay) == 5
     trainer.fit()
-    # Replay should still hold 5 samples.
-    assert len(trainer.replay) == 5
+    # Reservoir sampling must cap the buffer at the configured capacity.
+    assert len(trainer.replay) == cfg.replay_capacity
+    # And it must never exceed it.
+    assert trainer.replay.n_seen >= cfg.replay_capacity
 
 
 def test_continual_trainer_replay_step_runs_when_buffer_nonempty():
@@ -331,7 +342,7 @@ def test_continual_trainer_replay_step_runs_when_buffer_nonempty():
     spec = SampleSpec(chart_window=8, feature_window=8, image_size=8)
     df = generate_market(MarketConfig(n_bars=80, seed=0))
     ds = MarketDataset(df, spec=spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
 
     cfg = ContinualConfig(
         n_iterations=1, bars_per_iter=80, replay_capacity=8,

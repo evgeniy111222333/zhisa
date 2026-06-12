@@ -56,7 +56,7 @@ def probe_model(small_spec):
     df = generate_market(MarketConfig(n_bars=200, seed=0))
     ds = MarketDataset(df, spec=small_spec)
     return build_default_policy(
-        in_numeric_features=ds._features.shape[1] + ds._time_features.shape[1],
+        in_numeric_features=ds._features.shape[1],
         in_context_features=ds._time_features.shape[1],
         window=small_spec.chart_window, image_size=small_spec.image_size,
         n_actions=9, n_regime_classes=small_spec.n_regime_states,
@@ -254,7 +254,7 @@ def test_trainer_raises_on_wrong_n_context(small_spec):
 def probe_model_features(spec):
     df = generate_market(MarketConfig(n_bars=200, seed=0))
     ds = MarketDataset(df, spec=spec)
-    return ds._features.shape[1] + ds._time_features.shape[1]
+    return ds._features.shape[1]
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ def test_curriculum_is_deterministic_under_seed(small_spec):
         df = generate_market(MarketConfig(n_bars=200, seed=0))
         ds = MarketDataset(df, spec=small_spec)
         m = build_default_policy(
-            in_numeric_features=ds._features.shape[1] + ds._time_features.shape[1],
+            in_numeric_features=ds._features.shape[1],
             in_context_features=ds._time_features.shape[1],
             window=small_spec.chart_window, image_size=small_spec.image_size,
             n_actions=9, n_regime_classes=small_spec.n_regime_states,

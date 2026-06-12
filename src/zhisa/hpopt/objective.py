@@ -89,7 +89,9 @@ def _probe_features(n_bars: int, chart_window: int, image_size: int, n_regime: i
     spec = SampleSpec(chart_window=chart_window, feature_window=chart_window,
                       image_size=image_size, n_regime_states=n_regime)
     ds = MarketDataset(df, spec=spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    # ``numeric`` carries OHLCV features only; cyclic time embeddings go
+    # into ``context`` (the env's contract — and the policy's default).
+    n_feat = ds._features.shape[1]
     n_ctx = ds._time_features.shape[1]
     return n_feat, n_ctx
 

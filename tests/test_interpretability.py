@@ -20,7 +20,7 @@ def _build_model_and_obs(n_bars: int = 200, seed: int = 0):
     spec = SampleSpec(chart_window=8, feature_window=8, image_size=8)
     df = generate_market(MarketConfig(n_bars=n_bars, seed=seed))
     ds = MarketDataset(df, spec=spec)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
     n_ctx = ds._time_features.shape[1]
     model = build_default_policy(
         in_numeric_features=n_feat,

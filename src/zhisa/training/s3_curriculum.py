@@ -270,7 +270,7 @@ class CurriculumTrainer:
         # responsibility — but it surfaces the most common setup error.
         probe_df = generate_market(self.stages[0].to_market_config(seed=self.base_seed))
         probe_ds = MarketDataset(probe_df, spec=self.spec)
-        expected_n_feat = probe_ds._features.shape[1] + probe_ds._time_features.shape[1]
+        expected_n_feat = probe_ds._features.shape[1]
         expected_n_ctx = probe_ds._time_features.shape[1]
         if hasattr(model, "cfg"):
             cfg = model.cfg

@@ -155,6 +155,10 @@ class CVaRPPOTrainer(PPOTrainer):
         num_t = to_t(stacked["numeric"]).float()
         ctx_t = to_t(stacked["context"]).float()
 
+        has_history = "history" in stacked
+        if has_history:
+            history_t = to_t(stacked["history"]).float()
+
         stats = {
             "policy": [], "value": [], "entropy": [], "total": [],
             "cvar_penalty": [], "cvar_value": [],
@@ -162,7 +166,13 @@ class CVaRPPOTrainer(PPOTrainer):
         lambda_t = torch.tensor(self.lambda_cvar, dtype=torch.float32, device=self.device)
         for epoch in range(cfg.n_epochs):
             for idx in buf.minibatch_indices(cfg.minibatch_size, self._rng):
-                out = self.model(chart=chart_t[idx], numeric=num_t[idx], context=ctx_t[idx])
+                hist_mb = history_t[idx] if has_history else None
+                out = self.model(
+                    chart=chart_t[idx],
+                    numeric=num_t[idx],
+                    context=ctx_t[idx],
+                    history=hist_mb
+                )
                 logits = out["policy_logits"]
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logp = dist.log_prob(action_t[idx])

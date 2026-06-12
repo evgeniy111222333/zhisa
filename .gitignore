@@ -57,3 +57,9 @@ data/cache/
 .env.local
 *.local.yaml
 secrets.*
+
+# Local test outputs/logs
+.pytest_full.log.err
+.pytest_full.log.out
+backtest_comparison.csv
+

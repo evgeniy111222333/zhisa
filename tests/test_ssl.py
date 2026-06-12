@@ -306,7 +306,7 @@ def test_ssl_fit_one_epoch_on_market_dataset(small_market, tmp_path, device):
     assert len(ds) > 0
 
     policy = build_default_policy(
-        in_numeric_features=ds._features.shape[1] + ds._time_features.shape[1],
+        in_numeric_features=ds._features.shape[1],
         in_context_features=ds._time_features.shape[1],
         window=spec.chart_window, image_size=spec.image_size,
         n_actions=9, n_regime_classes=spec.n_regime_states,
@@ -330,7 +330,7 @@ def test_ssl_fit_loss_decreases_across_epochs(small_market, device):
                       horizons=(4, 8), n_regime_states=3)
     ds = MarketDataset(small_market, spec=spec, cache_charts=True)
     policy = build_default_policy(
-        in_numeric_features=ds._features.shape[1] + ds._time_features.shape[1],
+        in_numeric_features=ds._features.shape[1],
         in_context_features=ds._time_features.shape[1],
         window=spec.chart_window, image_size=spec.image_size,
         n_actions=9, n_regime_classes=spec.n_regime_states,
@@ -372,7 +372,7 @@ def test_s2_can_resume_from_s1_checkpoint(small_market, tmp_path, device):
     spec = SampleSpec(chart_window=16, feature_window=16, image_size=16,
                       horizons=(4, 8), n_regime_states=3)
     ds = MarketDataset(small_market, spec=spec, cache_charts=True)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
     n_ctx = ds._time_features.shape[1]
     policy = build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,

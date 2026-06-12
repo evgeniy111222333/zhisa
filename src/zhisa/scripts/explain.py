@@ -103,7 +103,7 @@ def _load_model(checkpoint: str | None, cfg: dict[str, Any], device: str) -> Pol
     )
     df = generate_market(MarketConfig(n_bars=int(cfg.get("bars", 600))))
     ds = MarketDataset(df, spec=spec)
-    n_feat = in_numeric_features or (ds._features.shape[1] + ds._time_features.shape[1])
+    n_feat = in_numeric_features or ds._features.shape[1]
     n_ctx = in_context_features or ds._time_features.shape[1]
     model = build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,

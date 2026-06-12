@@ -100,13 +100,19 @@ class PolicyNetwork(nn.Module):
             instrument_id: optional (B,) long.
         """
         z = self.encode(chart, numeric, context, instrument_id=instrument_id)
-        if self.memory is not None and history is not None:
+        if self.memory is not None:
+            max_hist_len = self.memory.cfg.max_len - 1
+            if history is None:
+                history = torch.zeros(
+                    z.size(0), max_hist_len, z.size(-1),
+                    device=z.device, dtype=z.dtype
+                )
             z_with_hist = torch.cat([history, z.unsqueeze(1)], dim=1)
             out_seq = self.memory(z_with_hist)
             z = out_seq[:, -1]
-            next_history = out_seq[:, -self.memory.cfg.max_len:]
+            next_history = z_with_hist[:, -max_hist_len:].detach()
         else:
-            next_history = z.unsqueeze(1) if self.memory is not None else None
+            next_history = None
         out = self.heads(z)
         out["embedding"] = z
         out["next_history"] = next_history

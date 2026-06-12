@@ -101,3 +101,22 @@ def compute_ohlcv_features(
 
     out = out.replace([np.inf, -np.inf], np.nan)
     return out.astype(np.float64)
+
+
+def normalize_feature_window(
+    feature_window: np.ndarray,
+    history_window: np.ndarray,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """Normalize a feature window using the mean and std of a trailing history window.
+
+    Robustly handles NaNs/Infs and returns a clean float32 array.
+    """
+    hist_clean = np.nan_to_num(history_window, nan=0.0, posinf=0.0, neginf=0.0)
+    feat_clean = np.nan_to_num(feature_window, nan=0.0, posinf=0.0, neginf=0.0)
+
+    mu = hist_clean.mean(axis=0)
+    sd = hist_clean.std(axis=0) + eps
+
+    normed = (feat_clean - mu) / sd
+    return np.nan_to_num(normed, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

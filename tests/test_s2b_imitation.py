@@ -40,7 +40,7 @@ def tiny_imitation_setup(tiny_market, device):
     # the test setup matches what the trainer will actually see.
     from zhisa.data.dataset import MarketDataset as _MD
     probe_ds = _MD(tiny_market, spec=spec)
-    n_feat = probe_ds._features.shape[1] + probe_ds._time_features.shape[1]
+    n_feat = probe_ds._features.shape[1]
     n_ctx = probe_ds._time_features.shape[1]
     model = build_default_policy(
         in_numeric_features=n_feat,

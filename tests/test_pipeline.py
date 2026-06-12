@@ -25,7 +25,7 @@ def test_end_to_end_pipeline(tmp_path: Path, device):
     df = generate_market(MarketConfig(n_bars=800, seed=42))
     spec = SampleSpec(chart_window=16, feature_window=16, image_size=16)
     ds = MarketDataset(df, spec=spec, cache_charts=True)
-    n_feat = ds._features.shape[1] + ds._time_features.shape[1]
+    n_feat = ds._features.shape[1]
     n_ctx = ds._time_features.shape[1]
 
     # 2) Model

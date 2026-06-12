@@ -97,6 +97,7 @@ class Transition:
     value: float
     log_prob: float
     done: bool
+    history: Optional[np.ndarray] = None
 
 
 class RolloutBuffer:
@@ -138,7 +139,7 @@ class RolloutBuffer:
         """
         if not self._data:
             return {}
-        return {
+        res = {
             "chart": np.stack([t.chart for t in self._data], axis=0),
             "numeric": np.stack([t.numeric for t in self._data], axis=0),
             "context": np.stack([t.context for t in self._data], axis=0),
@@ -148,6 +149,9 @@ class RolloutBuffer:
             "log_prob": np.array([t.log_prob for t in self._data], dtype=np.float32),
             "done": np.array([t.done for t in self._data], dtype=np.float32),
         }
+        if self._data[0].history is not None:
+            res["history"] = np.stack([t.history for t in self._data], axis=0)
+        return res
 
     def clear(self) -> None:
         self._data.clear()
@@ -267,9 +271,9 @@ class PPOTrainer:
     # ------------------------------------------------------------------
 
     def _select_action(
-        self, obs: dict
-    ) -> tuple[int, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return ``(action, log_prob, value, entropy)`` for a single obs.
+        self, obs: dict, history: Optional[torch.Tensor] = None
+    ) -> tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """Return ``(action, log_prob, value, entropy, next_history)`` for a single obs.
 
         If the policy produces non-finite logits (a known failure mode
         of an untrained or freshly-perturbed network), we fall back to
@@ -279,9 +283,12 @@ class PPOTrainer:
         chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(self.device)
         num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(self.device)
         ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(self.device)
+        if history is not None:
+            history = history.to(self.device)
         with torch.no_grad():
-            out = self.model(chart=chart, numeric=num, context=ctx)
+            out = self.model(chart=chart, numeric=num, context=ctx, history=history)
             logits = out["policy_logits"]
+            next_history = out.get("next_history")
             if not torch.isfinite(logits).all():
                 # Degenerate policy → fall back to a uniform sample.
                 n_actions = logits.size(-1)
@@ -289,13 +296,13 @@ class PPOTrainer:
                 logp = torch.log(torch.full((1,), 1.0 / n_actions, device=self.device))
                 value = out["value"]
                 entropy = torch.log(torch.tensor(float(n_actions), device=self.device))
-                return int(action.item()), logp.squeeze(0), value.squeeze(0), entropy.squeeze(0)
+                return int(action.item()), logp.squeeze(0), value.squeeze(0), entropy.squeeze(0), next_history
             dist = torch.distributions.Categorical(logits=logits)
             action = dist.sample()
             logp = dist.log_prob(action)
             value = out["value"]
             entropy = dist.entropy()
-        return int(action.item()), logp.squeeze(0), value.squeeze(0), entropy.squeeze(0)
+        return int(action.item()), logp.squeeze(0), value.squeeze(0), entropy.squeeze(0), next_history
 
     def _collect_rollout(self, env: TradingEnv) -> tuple[RolloutBuffer, dict]:
         """Run ``n_episodes`` episodes and return a populated buffer."""
@@ -306,9 +313,21 @@ class PPOTrainer:
             obs, _ = env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
             ep_return = 0.0
             steps = 0
+            history = None
             for _ in range(self.cfg.max_steps_per_episode):
-                action, logp, value, _ = self._select_action(obs)
+                action, logp, value, _, next_history = self._select_action(obs, history)
                 next_obs, reward, terminated, truncated, _info = env.step(action)
+                
+                if self.model.memory is not None:
+                    max_hist_len = self.model.memory.cfg.max_len - 1
+                    hist_np = (
+                        history.squeeze(0).cpu().numpy()
+                        if history is not None
+                        else np.zeros((max_hist_len, self.model.cfg.embed_dim), dtype=np.float32)
+                    )
+                else:
+                    hist_np = None
+
                 buf.add(Transition(
                     chart=obs["chart"],
                     numeric=obs["numeric"],
@@ -318,10 +337,12 @@ class PPOTrainer:
                     value=float(value.item()),
                     log_prob=float(logp.item()),
                     done=bool(terminated or truncated),
+                    history=hist_np,
                 ))
                 ep_return += float(reward)
                 steps += 1
                 obs = next_obs
+                history = next_history
                 if terminated or truncated:
                     break
             ep_returns.append(ep_return)
@@ -368,12 +389,22 @@ class PPOTrainer:
         num_t = to_t(stacked["numeric"]).float()
         ctx_t = to_t(stacked["context"]).float()
 
+        has_history = "history" in stacked
+        if has_history:
+            history_t = to_t(stacked["history"]).float()
+
         stats = {"policy": [], "value": [], "entropy": [], "total": []}
         n_updates = 0
         for epoch in range(cfg.n_epochs):
             for idx in buf.minibatch_indices(cfg.minibatch_size, self._rng):
                 # Forward pass on the mini-batch.
-                out = self.model(chart=chart_t[idx], numeric=num_t[idx], context=ctx_t[idx])
+                hist_mb = history_t[idx] if has_history else None
+                out = self.model(
+                    chart=chart_t[idx],
+                    numeric=num_t[idx],
+                    context=ctx_t[idx],
+                    history=hist_mb
+                )
                 logits = out["policy_logits"]
                 dist = torch.distributions.Categorical(logits=logits)
                 new_logp = dist.log_prob(action_t[idx])

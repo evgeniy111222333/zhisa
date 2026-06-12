@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         n_regime_states=int(cfg.get("n_regime_states", 4)) if cfg else 4,
     )
     probe_ds = MarketDataset(df, spec=spec)
-    n_feat = probe_ds._features.shape[1] + probe_ds._time_features.shape[1]
+    n_feat = probe_ds._features.shape[1]
     n_ctx = probe_ds._time_features.shape[1]
 
     # --- Embedder (frozen) + behaviour policy ---

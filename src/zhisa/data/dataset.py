@@ -26,7 +26,7 @@ from zhisa.data.labeling import (
     realized_volatility,
     triple_barrier,
 )
-from zhisa.features.ohlcv import compute_ohlcv_features
+from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
 from zhisa.features.time import compute_time_features
 from zhisa.rendering.chart_renderer import render_chart
 
@@ -119,28 +119,15 @@ class MarketDataset(Dataset):
         spec = self.spec
         start = t
         end = t + spec.chart_window
-        feature_window = self._features.iloc[start:end]
-        time_window = self._time_features.iloc[start:end]
-
-        # Combine numeric features (NaN -> 0, robust fill)
-        num = np.concatenate([feature_window.values, time_window.values], axis=1)
-        num = np.nan_to_num(num, nan=0.0, posinf=0.0, neginf=0.0)
-        num = num.astype(np.float32)
-        # z-score per feature using trailing window stats (avoid look-ahead).
-        # Use a wider trailing window (up to t) for the mean/std.
+        feature_window = self._features.iloc[start:end].to_numpy(dtype=np.float32)
         hist_start = max(0, t - 256)
-        hist = self._features.iloc[hist_start:end]
-        # ``nanmean``/``nanstd`` ignore NaN values; if a column is all-NaN
-        # (early samples where long-lookback features like ``logret_16``
-        # or ``sma_slope_50`` are not yet valid) we still want finite
-        # statistics. Use ``np.nanmean`` with a NaN-to-0 fallback.
-        hist_arr = np.nan_to_num(hist.to_numpy(dtype=np.float32), nan=0.0)
-        mu = hist_arr.mean(axis=0)
-        sd = hist_arr.std(axis=0) + 1e-6
-        feat_dim = self._features.shape[1]
-        num[:, :feat_dim] = (num[:, :feat_dim] - mu) / sd
-        # Final safety net: any residual NaN/Inf becomes 0.
-        num = np.nan_to_num(num, nan=0.0, posinf=0.0, neginf=0.0)
+        history_window = self._features.iloc[hist_start:end].to_numpy(dtype=np.float32)
+
+        # Numeric features only (NaN -> 0, robust fill). The cyclic time
+        # embeddings are placed in ``context`` (last bar) so the dataset's
+        # ``numeric`` shape matches the env's contract — and the policy's
+        # ``in_numeric_features`` default (32) is wire-compatible.
+        num = normalize_feature_window(feature_window, history_window)
 
         chart = self._chart(t)
         ctx = self._time_features.iloc[end - 1].to_numpy(dtype=np.float32)

@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     # Probe feature dims with a tiny market.
     probe_df = generate_market(MarketConfig(n_bars=200, seed=seed))
     probe_ds = MarketDataset(probe_df, spec=spec)
-    n_feat = probe_ds._features.shape[1] + probe_ds._time_features.shape[1]
+    n_feat = probe_ds._features.shape[1]
     n_ctx = probe_ds._time_features.shape[1]
 
     model = build_default_policy(
