@@ -36,6 +36,13 @@ from zhisa.regime.memory import (
     RegimeMemorySummary,
     RegimeOutcome,
 )
+from zhisa.regime.planner import (
+    RegimeTradePlanner,
+    TradePlan,
+    TradePlannerConfig,
+    TradeSetup,
+    plan_trade,
+)
 from zhisa.regime.schema import (
     ExpectedDuration,
     MacroRegime,
@@ -99,6 +106,7 @@ __all__ = [
     "RegimeMemoryMatch",
     "RegimeMemorySummary",
     "RegimeOutcome",
+    "RegimeTradePlanner",
     "RegimeReport",
     "RegimeStateTracker",
     "RegimeStateTrackerConfig",
@@ -116,11 +124,15 @@ __all__ = [
     "StateSpaceRegimeModel",
     "StateSpaceReport",
     "StructureConfig",
+    "TradePlan",
+    "TradePlannerConfig",
+    "TradeSetup",
     "TrendState",
     "append_regime_context",
     "apply_regime_action_mask",
     "coerce_market_context",
     "compute_regime_features",
+    "plan_trade",
     "regime_action_mask",
     "regime_position_size_multiplier",
     "regime_supervision_collate",

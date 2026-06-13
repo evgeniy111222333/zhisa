@@ -13,6 +13,7 @@ from zhisa.env.actions import DiscreteAction
 from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.regime.detector import RegimeIntelligence, RegimeIntelligenceConfig
 from zhisa.regime.gating import RegimeActionGateConfig, apply_regime_action_mask, regime_action_mask
+from zhisa.regime.planner import RegimeTradePlanner, TradePlan
 from zhisa.regime.schema import RegimeReport
 
 
@@ -75,6 +76,7 @@ class RegimeGatedPolicy:
         self.gate_cfg = gate_cfg or RegimeActionGateConfig()
         self.fallback_action = int(fallback_action)
         self.reports: list[RegimeReport] = []
+        self.plans: list[TradePlan] = []
         self.actions_raw: list[int] = []
         self.actions_final: list[int] = []
         self.masked_count = 0
@@ -98,6 +100,7 @@ class RegimeGatedPolicy:
     def select_action(self, *, obs: dict, env: TradingEnv) -> int:
         report = self._report(env)
         current_position = float(env._position)
+        plan = RegimeTradePlanner().plan(report, current_position=current_position, n_actions=env.action_space.n)
         mask = regime_action_mask(
             report,
             current_position=current_position,
@@ -124,6 +127,7 @@ class RegimeGatedPolicy:
         if action != raw_action:
             self.masked_count += 1
         self.reports.append(report)
+        self.plans.append(plan)
         self.actions_raw.append(raw_action)
         self.actions_final.append(action)
         return action
@@ -133,11 +137,16 @@ class RegimeGatedPolicy:
         risk_modes: dict[str, int] = {}
         transition_risks: list[float] = []
         tradeability: list[float] = []
+        plan_status: dict[str, int] = {}
+        recommended_playbooks: dict[str, int] = {}
         for report in self.reports:
             regimes[report.primary_regime] = regimes.get(report.primary_regime, 0) + 1
             risk_modes[report.risk_mode] = risk_modes.get(report.risk_mode, 0) + 1
             transition_risks.append(float(report.transition_risk))
             tradeability.append(float(report.tradeability_score))
+        for plan in self.plans:
+            plan_status[plan.status] = plan_status.get(plan.status, 0) + 1
+            recommended_playbooks[plan.recommended_playbook] = recommended_playbooks.get(plan.recommended_playbook, 0) + 1
         return {
             "n_steps": len(self.reports),
             "n_masked_actions": int(self.masked_count),
@@ -146,6 +155,8 @@ class RegimeGatedPolicy:
             "risk_modes": risk_modes,
             "mean_transition_risk": float(np.mean(transition_risks)) if transition_risks else 0.0,
             "mean_tradeability": float(np.mean(tradeability)) if tradeability else 0.0,
+            "plan_status": plan_status,
+            "recommended_playbooks": recommended_playbooks,
         }
 
 
