@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from zhisa.backtest.engine import BacktestResult, buy_and_hold_benchmark, run_backtest
+from zhisa.backtest.engine import buy_and_hold_benchmark, run_backtest
 from zhisa.backtest.metrics import compute_metrics
 from zhisa.backtest.reports import print_metrics, save_report
+from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
 from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.env.trading_env import EnvConfig
 from zhisa.models.policy import build_default_policy
@@ -34,19 +36,25 @@ def _random_policy(seed: int = 0):
     return _p
 
 
-def _model_policy(model, device: str = "cpu"):
-    model.eval()
-    model.to(device)
+class TorchModelPolicy:
+    """Callable policy that also exposes logits for regime-aware gating."""
 
-    def _p(obs):
+    def __init__(self, model, device: str = "cpu") -> None:
+        self.model = model
+        self.device = device
+        self.model.eval()
+        self.model.to(device)
+
+    def logits(self, obs) -> torch.Tensor:
         with torch.no_grad():
-            chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(device)
-            num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(device)
-            ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(device)
-            out = model(chart=chart, numeric=num, context=ctx)
-            return int(out["policy_logits"].argmax(dim=-1).item())
+            chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(self.device)
+            num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(self.device)
+            ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(self.device)
+            out = self.model(chart=chart, numeric=num, context=ctx)
+            return out["policy_logits"].squeeze(0).detach().cpu()
 
-    return _p
+    def __call__(self, obs) -> int:
+        return int(self.logits(obs).argmax(dim=-1).item())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,6 +63,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--out", type=str, default="artifacts/backtest")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--regime-ab",
+        action="store_true",
+        help="run baseline and regime-gated variants side by side",
+    )
     args = parser.parse_args(argv)
 
     set_seed(args.seed)
@@ -73,12 +86,35 @@ def main(argv: list[str] | None = None) -> int:
             n_regime_classes=int(cfg.get("n_regime_classes", 4)),
         )
         model.load_state_dict(ckpt["model"])
-        policy = _model_policy(model)
+        policy = TorchModelPolicy(model)
         env_cfg.window = int(cfg.get("window", env_cfg.window))
         env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
     else:
         policy = _random_policy(args.seed)
         print("No checkpoint provided; using random policy for smoke test.")
+
+    if args.regime_ab:
+        ab = run_regime_ab_backtest(
+            df,
+            policy,
+            env_cfg=env_cfg,
+            cfg=RegimeABConfig(),
+            seed=args.seed,
+        )
+        print_metrics(ab.baseline.result.metrics, title=ab.baseline.name)
+        print_metrics(ab.gated.result.metrics, title=ab.gated.name)
+        print("== regime summary ==")
+        print(json.dumps(ab.gated.regime_summary, indent=2))
+        bh = buy_and_hold_benchmark(df)
+        print_metrics(compute_metrics(bh), title="buy&hold")
+        if args.out:
+            save_report(ab.baseline.result, args.out, name=ab.baseline.name)
+            save_report(ab.gated.result, args.out, name=ab.gated.name)
+            out_dir = Path(args.out)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            with (out_dir / "regime_ab_comparison.json").open("w", encoding="utf-8") as f:
+                json.dump(ab.comparison, f, indent=2)
+        return 0
 
     result = run_backtest(df, policy, cfg=env_cfg)
     print_metrics(result.metrics, title="policy")

@@ -17,6 +17,7 @@ class RegimeEncoderConfig:
     input_dim: int | None = None
     embed_dim: int = 32
     hidden_dim: int = 96
+    n_playbooks: int = 24
     dropout: float = 0.1
     vectorizer: RegimeVectorizerConfig = field(default_factory=RegimeVectorizerConfig)
 
@@ -46,6 +47,7 @@ class RegimeEncoder(nn.Module):
         self.macro_head = nn.Linear(self.cfg.embed_dim, len(tuple(MacroRegime)))
         self.meso_head = nn.Linear(self.cfg.embed_dim, len(tuple(MesoRegime)))
         self.risk_head = nn.Linear(self.cfg.embed_dim, len(tuple(RiskMode)))
+        self.playbook_head = nn.Linear(self.cfg.embed_dim, self.cfg.n_playbooks)
         self.tradeability_head = nn.Linear(self.cfg.embed_dim, 1)
         self.transition_head = nn.Linear(self.cfg.embed_dim, 1)
 
@@ -78,6 +80,7 @@ class RegimeEncoder(nn.Module):
             "macro_logits": self.macro_head(z),
             "meso_logits": self.meso_head(z),
             "risk_logits": self.risk_head(z),
+            "playbook_logits": self.playbook_head(z),
             "tradeability": torch.sigmoid(self.tradeability_head(z)).squeeze(-1),
             "transition_risk": torch.sigmoid(self.transition_head(z)).squeeze(-1),
         }

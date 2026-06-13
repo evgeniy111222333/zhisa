@@ -22,6 +22,12 @@ from zhisa.training.portfolio_ppo import (
     PortfolioRolloutBuffer,
     PortfolioTransition,
 )
+from zhisa.training.regime_supervised import (
+    RegimeEncoderLoss,
+    RegimeEncoderTrainer,
+    RegimeLossWeights,
+    RegimeTrainConfig,
+)
 from zhisa.training.s2b_imitation import (
     BCConfig,
     BehavioralCloningTrainer,
@@ -59,6 +65,10 @@ __all__ = [
     "PortfolioPPOTrainer",
     "PortfolioRolloutBuffer",
     "PortfolioTransition",
+    "RegimeEncoderLoss",
+    "RegimeEncoderTrainer",
+    "RegimeLossWeights",
+    "RegimeTrainConfig",
     "WorldModelDataset",
     "WorldModelTrainer",
     "WorldModelTrainerConfig",

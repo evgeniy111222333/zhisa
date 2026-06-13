@@ -1,6 +1,33 @@
 """Market Regime Intelligence."""
+from zhisa.regime.context import (
+    CorrelationState,
+    CrowdingState,
+    MarketContextAnalyzer,
+    MarketContextConfig,
+    MarketContextReport,
+    coerce_market_context,
+)
+from zhisa.regime.dataset import (
+    MACRO_TO_ID,
+    MESO_TO_ID,
+    PLAYBOOK_NAMES,
+    PLAYBOOK_TO_ID,
+    RISK_MODE_TO_ID,
+    RegimeSupervisionBatch,
+    RegimeSupervisionConfig,
+    RegimeSupervisionDataset,
+    RegimeSupervisionItem,
+    regime_supervision_collate,
+)
 from zhisa.regime.detector import RegimeIntelligence, RegimeIntelligenceConfig
+from zhisa.regime.encoder import RegimeEncoder, RegimeEncoderConfig, append_regime_context
 from zhisa.regime.features import RegimeFeatureConfig, compute_regime_features
+from zhisa.regime.gating import (
+    RegimeActionGateConfig,
+    apply_regime_action_mask,
+    regime_action_mask,
+    regime_position_size_multiplier,
+)
 from zhisa.regime.memory import (
     RegimeMemory,
     RegimeMemoryConfig,
@@ -18,6 +45,19 @@ from zhisa.regime.schema import (
     RegimeReport,
     RiskMode,
 )
+from zhisa.regime.state_space import (
+    StateSpaceConfig,
+    StateSpaceRegimeModel,
+    StateSpaceReport,
+)
+from zhisa.regime.structure import (
+    LiquidityLevel,
+    LiquidityMap,
+    MarketStructureAnalyzer,
+    MarketStructureReport,
+    StructureConfig,
+    TrendState,
+)
 from zhisa.regime.tracker import (
     RegimeStateTracker,
     RegimeStateTrackerConfig,
@@ -28,10 +68,27 @@ from zhisa.regime.tracker import (
 from zhisa.regime.vectorizer import RegimeFeatureVectorizer, RegimeVectorizerConfig
 
 __all__ = [
+    "CorrelationState",
+    "CrowdingState",
     "ExpectedDuration",
+    "MACRO_TO_ID",
+    "MESO_TO_ID",
     "MacroRegime",
+    "MarketContextAnalyzer",
+    "MarketContextConfig",
+    "MarketContextReport",
+    "LiquidityLevel",
+    "LiquidityMap",
+    "MarketStructureAnalyzer",
+    "MarketStructureReport",
     "MesoRegime",
     "MicroRegime",
+    "PLAYBOOK_NAMES",
+    "PLAYBOOK_TO_ID",
+    "RISK_MODE_TO_ID",
+    "RegimeActionGateConfig",
+    "RegimeEncoder",
+    "RegimeEncoderConfig",
     "RegimeFeatureConfig",
     "RegimeFeatures",
     "RegimeIntelligence",
@@ -45,11 +102,26 @@ __all__ = [
     "RegimeReport",
     "RegimeStateTracker",
     "RegimeStateTrackerConfig",
+    "RegimeSupervisionBatch",
+    "RegimeSupervisionConfig",
+    "RegimeSupervisionDataset",
+    "RegimeSupervisionItem",
     "RegimeTrackPoint",
     "RegimeTrackState",
     "RegimeTransition",
     "RegimeFeatureVectorizer",
     "RegimeVectorizerConfig",
     "RiskMode",
+    "StateSpaceConfig",
+    "StateSpaceRegimeModel",
+    "StateSpaceReport",
+    "StructureConfig",
+    "TrendState",
+    "append_regime_context",
+    "apply_regime_action_mask",
+    "coerce_market_context",
     "compute_regime_features",
+    "regime_action_mask",
+    "regime_position_size_multiplier",
+    "regime_supervision_collate",
 ]

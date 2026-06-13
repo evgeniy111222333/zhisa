@@ -29,6 +29,20 @@ class BacktestResult:
 PolicyFn = Callable[[dict], int]
 
 
+def _select_action(policy: PolicyFn, obs: dict, env: TradingEnv) -> int:
+    """Call either a plain policy or a state-aware policy adapter."""
+    select = getattr(policy, "select_action", None)
+    if callable(select):
+        return int(select(obs=obs, env=env))
+    return int(policy(obs))
+
+
+def _observe_step(policy: PolicyFn, obs: dict, action: int, reward: float, info: dict, env: TradingEnv) -> None:
+    observe = getattr(policy, "observe_step", None)
+    if callable(observe):
+        observe(obs=obs, action=action, reward=reward, info=info, env=env)
+
+
 def run_backtest(
     df: pd.DataFrame,
     policy: PolicyFn,
@@ -68,8 +82,9 @@ def run_backtest(
     equity_ceiling_mult = 100.0  # 100x initial equity as a sanity cap
     init_equity = float(env._equity)
     while not done:
-        action = int(policy(obs))
+        action = _select_action(policy, obs, env)
         obs, r, terminated, truncated, info = env.step(action)
+        _observe_step(policy, obs, action, float(r), info, env)
         info_hist.append(info)
         # Guard the per-step equity.
         eq_raw = float(info["equity"])

@@ -136,6 +136,7 @@ def test_regime_encoder_shapes_and_gradients() -> None:
         + out["macro_logits"].sum()
         + out["meso_logits"].sum()
         + out["risk_logits"].sum()
+        + out["playbook_logits"].sum()
         + out["tradeability"].sum()
         + out["transition_risk"].sum()
     )
@@ -143,6 +144,7 @@ def test_regime_encoder_shapes_and_gradients() -> None:
 
     assert out["embedding"].shape == (2, encoder.cfg.embed_dim)
     assert out["macro_logits"].shape[0] == 2
+    assert out["playbook_logits"].shape[0] == 2
     assert out["tradeability"].shape == (2,)
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in encoder.parameters())
 

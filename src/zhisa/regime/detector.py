@@ -7,6 +7,12 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from zhisa.regime.context import (
+    MarketContextAnalyzer,
+    MarketContextConfig,
+    MarketContextReport,
+    coerce_market_context,
+)
 from zhisa.regime.features import RegimeFeatureConfig, compute_regime_features
 from zhisa.regime.schema import (
     ExpectedDuration,
@@ -16,6 +22,16 @@ from zhisa.regime.schema import (
     RegimeFeatures,
     RegimeReport,
     RiskMode,
+)
+from zhisa.regime.structure import (
+    MarketStructureAnalyzer,
+    MarketStructureReport,
+    StructureConfig,
+)
+from zhisa.regime.state_space import (
+    StateSpaceConfig,
+    StateSpaceRegimeModel,
+    StateSpaceReport,
 )
 from zhisa.storage.resampler import resample_ohlcv
 from zhisa.storage.schema import Timeframe
@@ -34,6 +50,9 @@ class RegimeIntelligenceConfig:
     expansion_vol_ratio: float = 1.35
     compression_quantile: float = 0.25
     range_trend_threshold: float = 0.35
+    context: MarketContextConfig = field(default_factory=MarketContextConfig)
+    structure: StructureConfig = field(default_factory=StructureConfig)
+    state_space: StateSpaceConfig = field(default_factory=StateSpaceConfig)
 
 
 def _softmax(scores: dict[str, float]) -> dict[str, float]:
@@ -84,6 +103,10 @@ class RegimeIntelligence:
         if work.empty:
             raise ValueError("df slice is empty")
 
+        extra = extra_context or {}
+        market_context = self._market_context(work, symbol=symbol, extra=extra)
+        market_structure = self._market_structure(work)
+        state_space = self._state_space(work)
         features = self._multi_timeframe_features(work)
         primary_tf = self.cfg.timeframes[0]
         primary = features.get(primary_tf) or next(iter(features.values()))
@@ -93,12 +116,13 @@ class RegimeIntelligence:
         micro = self._classify_micro(primary)
         confidence = max(probs.values()) if probs else self.cfg.min_confidence
         transition_risk = self._transition_risk(primary, agg, macro, meso)
+        transition_risk = self._context_transition_risk(transition_risk, market_context, market_structure, state_space)
         uncertainty = _clip01((1.0 - confidence) * 0.7 + transition_risk * 0.3)
-        risk_mode, size_mult = self._risk_posture(macro, meso, transition_risk, primary)
-        allowed, blocked = self._playbooks(macro, meso, micro, risk_mode, primary)
+        risk_mode, size_mult = self._risk_posture(macro, meso, transition_risk, primary, market_context, market_structure)
+        allowed, blocked = self._playbooks(macro, meso, micro, risk_mode, primary, market_context, market_structure, state_space)
         stop_style, tp_style = self._exit_styles(macro, meso, primary)
-        tradeability = self._tradeability(macro, meso, micro, risk_mode, transition_risk, primary)
-        why, danger = self._explain(macro, meso, micro, primary, agg, extra_context or {})
+        tradeability = self._tradeability(macro, meso, micro, risk_mode, transition_risk, primary, market_context, market_structure)
+        why, danger = self._explain(macro, meso, micro, primary, agg, extra, market_context, market_structure, state_space)
 
         return RegimeReport(
             primary_regime=macro.value,
@@ -116,14 +140,42 @@ class RegimeIntelligence:
             stop_style=stop_style,
             take_profit_style=tp_style,
             explanation={"why": why, "danger": danger},
+            trend_phase=market_structure.trend.phase,
             features={
                 "symbol": symbol,
                 "timestamp": work.index[-1].isoformat() if isinstance(work.index, pd.DatetimeIndex) else None,
                 "aggregate": agg,
                 "timeframes": {tf: f.to_dict() for tf, f in features.items()},
+                "market_context": market_context.to_dict(),
+                "market_structure": market_structure.to_dict(),
+                "state_space": state_space.to_dict(),
             },
             probabilities=probs,
         )
+
+    def _market_context(
+        self,
+        df: pd.DataFrame,
+        *,
+        symbol: str,
+        extra: dict,
+    ) -> MarketContextReport:
+        supplied = coerce_market_context(extra.get("market_context"))
+        if supplied is not None:
+            return supplied
+        analyzer = MarketContextAnalyzer(self.cfg.context)
+        return analyzer.analyze(
+            df,
+            symbol=symbol,
+            assets=extra.get("assets"),
+            benchmark_symbol=str(extra.get("benchmark_symbol", extra.get("btc_symbol", self.cfg.context.benchmark_symbol))),
+        )
+
+    def _market_structure(self, df: pd.DataFrame) -> MarketStructureReport:
+        return MarketStructureAnalyzer(self.cfg.structure).analyze(df)
+
+    def _state_space(self, df: pd.DataFrame) -> StateSpaceReport:
+        return StateSpaceRegimeModel(self.cfg.state_space).analyze(df)
 
     def _multi_timeframe_features(self, df: pd.DataFrame) -> dict[str, RegimeFeatures]:
         out: dict[str, RegimeFeatures] = {}
@@ -261,17 +313,49 @@ class RegimeIntelligence:
         risk += min(primary.shock_score / 20.0, 0.2)
         return _clip01(risk)
 
+    def _context_transition_risk(
+        self,
+        base: float,
+        context: MarketContextReport,
+        structure: MarketStructureReport,
+        state_space: StateSpaceReport,
+    ) -> float:
+        risk = float(base)
+        crowding = context.crowding
+        corr = context.correlation
+        risk += 0.15 * crowding.crowding_score
+        risk += 0.15 if "liquidation_spike" in crowding.flags else 0.0
+        risk += 0.12 if corr.regime == "risk_off_sync" else 0.0
+        risk += 0.08 if corr.regime == "fragmented" else 0.0
+        risk += 0.05 if corr.regime in {"benchmark_led", "leader_led"} and corr.leader_lead_score > 0.2 else 0.0
+        risk += 0.12 if structure.trend.phase in {"late", "exhausted"} else 0.0
+        risk += 0.08 if structure.trend.exhaustion_score > 0.55 else 0.0
+        risk += 0.20 * max(0.0, state_space.transition_probability - 0.30)
+        risk += 0.18 * max(0.0, state_space.change_point_score - 0.50)
+        risk += 0.08 * max(0.0, state_space.entropy - 0.50)
+        return _clip01(risk)
+
     def _risk_posture(
         self,
         macro: MacroRegime,
         meso: MesoRegime,
         transition_risk: float,
         primary: RegimeFeatures,
+        context: MarketContextReport,
+        structure: MarketStructureReport,
     ) -> tuple[RiskMode, float]:
+        if "liquidation_spike" in context.crowding.flags:
+            return RiskMode.DEFENSIVE, 0.2
         if macro == MacroRegime.HIGH_VOL_CRASH or meso == MesoRegime.LIQUIDATION_CASCADE:
             return RiskMode.DEFENSIVE, 0.2
         if transition_risk > 0.65 or macro == MacroRegime.EVENT_DRIVEN:
             return RiskMode.REDUCED, 0.35
+        if context.correlation.regime == "risk_off_sync" and transition_risk > 0.35:
+            return RiskMode.REDUCED, 0.35
+        if context.crowding.crowding_score > 0.65:
+            return RiskMode.REDUCED, 0.5
+        if structure.trend.phase == "exhausted":
+            return RiskMode.REDUCED, 0.45
         if meso == MesoRegime.COMPRESSION:
             return RiskMode.REDUCED, 0.5
         if abs(primary.trend_score) > 1.2 and primary.trend_efficiency > 0.55:
@@ -287,6 +371,9 @@ class RegimeIntelligence:
         micro: MicroRegime,
         risk_mode: RiskMode,
         primary: RegimeFeatures,
+        context: MarketContextReport,
+        structure: MarketStructureReport,
+        state_space: StateSpaceReport,
     ) -> tuple[list[str], list[str]]:
         allowed: set[str] = set()
         blocked: set[str] = set()
@@ -313,6 +400,30 @@ class RegimeIntelligence:
             blocked.add("breakout_chase")
         if risk_mode in {RiskMode.DEFENSIVE, RiskMode.REDUCED}:
             blocked.add("full_size_position")
+        if context.crowding.direction == "long_crowded":
+            allowed.add("pullback_only_long")
+            blocked.update({"late_breakout_chase_long", "crowded_long_chase"})
+        if context.crowding.direction == "short_crowded":
+            allowed.add("pullback_only_short")
+            blocked.update({"late_breakout_chase_short", "crowded_short_chase"})
+        if "liquidation_spike" in context.crowding.flags:
+            allowed.add("liquidation_retest_only")
+            blocked.update({"fresh_full_size_entry", "blind_liquidation_fade"})
+        if context.correlation.regime == "fragmented":
+            allowed.add("relative_strength_only")
+            blocked.add("market_beta_chase")
+        if context.correlation.regime == "risk_off_sync":
+            blocked.update({"full_size_long", "correlation_blind_long"})
+        if structure.trend.phase in {"late", "exhausted"}:
+            allowed.add("pullback_to_value_only")
+            blocked.update({"late_trend_chase", "full_size_breakout_chase"})
+        if structure.liquidity.nearest_level is not None and abs(structure.liquidity.nearest_level.distance_pct) < 0.01:
+            blocked.add("entry_directly_into_liquidity")
+        if structure.liquidity.in_value_area:
+            allowed.add("value_area_reversion")
+        if state_space.change_point_score > 0.65 or state_space.transition_probability > 0.55:
+            allowed.add("transition_wait")
+            blocked.update({"fresh_full_size_entry", "regime_transition_chase"})
         if primary.range_position > 0.85 and macro == MacroRegime.BULL_TREND:
             blocked.add("chase_long_at_high")
         if primary.range_position < 0.15 and macro == MacroRegime.BEAR_TREND:
@@ -341,6 +452,8 @@ class RegimeIntelligence:
         risk_mode: RiskMode,
         transition_risk: float,
         primary: RegimeFeatures,
+        context: MarketContextReport,
+        structure: MarketStructureReport,
     ) -> float:
         score = 0.65
         score += 0.15 if meso in {MesoRegime.PULLBACK, MesoRegime.BREAKOUT, MesoRegime.IMPULSE} else 0.0
@@ -350,6 +463,12 @@ class RegimeIntelligence:
         score += 0.10 if primary.trend_efficiency > 0.55 else 0.0
         score -= 0.15 if micro in {MicroRegime.THIN_BOOK, MicroRegime.NOISY_CHOP} else 0.0
         score -= 0.10 if risk_mode == RiskMode.DEFENSIVE else 0.0
+        score -= 0.15 * context.crowding.crowding_score
+        score -= 0.15 if context.correlation.regime == "risk_off_sync" else 0.0
+        score -= 0.10 if context.correlation.regime == "fragmented" else 0.0
+        score -= 0.12 if structure.trend.phase == "late" else 0.0
+        score -= 0.22 if structure.trend.phase == "exhausted" else 0.0
+        score -= 0.08 if structure.liquidity.nearest_level is not None and abs(structure.liquidity.nearest_level.distance_pct) < 0.005 else 0.0
         return _clip01(score)
 
     def _expected_duration(
@@ -376,6 +495,9 @@ class RegimeIntelligence:
         primary: RegimeFeatures,
         agg: dict[str, float],
         extra: dict,
+        context: MarketContextReport,
+        structure: MarketStructureReport,
+        state_space: StateSpaceReport,
     ) -> tuple[list[str], list[str]]:
         why: list[str] = []
         danger: list[str] = []
@@ -397,6 +519,53 @@ class RegimeIntelligence:
         funding = extra.get("funding")
         if funding is not None and abs(float(funding)) > 0.0005:
             danger.append("funding is crowded")
+        crowding = context.crowding
+        corr = context.correlation
+        if crowding.flags:
+            why.append(f"crowding={crowding.direction}, score={crowding.crowding_score:.2f}")
+        if crowding.direction != "neutral":
+            danger.append(f"derivatives crowding is {crowding.direction}")
+        if "open_interest_fast_change" in crowding.flags:
+            danger.append("open interest is changing quickly")
+        if "liquidation_spike" in crowding.flags:
+            danger.append("liquidation spike / forced flow detected")
+        if corr.regime != "single_asset":
+            why.append(
+                f"correlation_regime={corr.regime}, avg_corr={corr.avg_correlation:.2f}, "
+                f"leader_lead={corr.leader_lead_score:.2f}"
+            )
+        if corr.regime == "risk_off_sync":
+            danger.append("cross-asset risk-off synchronization")
+        if corr.regime == "fragmented":
+            danger.append("market is fragmented; broad confirmation is weak")
+        if corr.regime in {"benchmark_led", "leader_led"}:
+            leader = corr.leader_symbol or corr.benchmark_symbol or "benchmark"
+            danger.append(f"{leader} appears to lead; other signals may lag")
+        trend = structure.trend
+        why.append(
+            f"trend_phase={trend.phase}, maturity={trend.maturity_score:.2f}, exhaustion={trend.exhaustion_score:.2f}"
+        )
+        if trend.phase == "late":
+            danger.append("trend is late; prefer pullback-to-value over chase")
+        if trend.phase == "exhausted":
+            danger.append("trend exhaustion risk is elevated")
+        why.append(
+            f"state_space={state_space.state_label}, change_point={state_space.change_point_score:.2f}, "
+            f"state_transition={state_space.transition_probability:.2f}"
+        )
+        if state_space.change_point_score > 0.65:
+            danger.append("unsupervised change-point score is elevated")
+        if state_space.transition_probability > 0.55:
+            danger.append("state-space model sees elevated transition probability")
+        liq = structure.liquidity
+        if liq.nearest_level is not None:
+            danger.append(
+                f"nearest liquidity {liq.nearest_level.name} is {liq.nearest_level.distance_pct:.3%} away"
+            )
+        if liq.in_value_area:
+            why.append("price is inside value area")
+        else:
+            why.append(f"price is {liq.distance_to_value_mid_pct:.3%} from value area mid")
         return why, danger
 
 

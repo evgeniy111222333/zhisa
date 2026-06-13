@@ -114,6 +114,7 @@ class RegimeReport:
     stop_style: str
     take_profit_style: str
     explanation: dict[str, list[str]]
+    trend_phase: str = "none"
     features: dict[str, Any] = field(default_factory=dict)
     probabilities: dict[str, float] = field(default_factory=dict)
 
