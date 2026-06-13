@@ -257,6 +257,21 @@ def test_no_barriers_means_no_force_closes(small_market):
     assert info["exit_reason"] == ""
 
 
+def test_skip_holds_open_position(small_market):
+    env = TradingEnv(small_market, cfg=EnvConfig(
+        window=16, image_size=16,
+        kill_on_drawdown=False,
+        risk_limits=RiskLimits(max_drawdown=1.0),
+    ))
+    env.reset(seed=0)
+    env.step(int(DiscreteAction.LONG_100))
+    position_before = env._position
+    _, _, _, _, info = env.step(int(DiscreteAction.SKIP))
+    assert env._position == position_before
+    assert info["position"] == position_before
+    assert info["fee"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Gymnasium registration
 # ---------------------------------------------------------------------------

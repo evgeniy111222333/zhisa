@@ -16,6 +16,8 @@ from zhisa.env.portfolio_action_mask import (
 
 def test_action_to_target_fraction_table():
     assert action_to_target_fraction(int(DiscreteAction.SKIP)) == 0.0
+    assert action_to_target_fraction(int(DiscreteAction.SKIP), 0.75) == 0.75
+    assert action_to_target_fraction(int(DiscreteAction.SKIP), -0.5) == -0.5
     assert action_to_target_fraction(int(DiscreteAction.LONG_25)) == 0.25
     assert action_to_target_fraction(int(DiscreteAction.LONG_100)) == 1.0
     assert action_to_target_fraction(int(DiscreteAction.SHORT_50)) == -0.5

@@ -11,6 +11,11 @@ from zhisa.models.portfolio_policy import (
     PortfolioPolicyNetwork,
     build_default_portfolio_policy,
 )
+from zhisa.models.regime_policy import (
+    RegimeAwarePolicyConfig,
+    RegimeAwarePolicyNetwork,
+    build_regime_aware_policy,
+)
 from zhisa.models.world_model import WorldModel, WorldModelConfig
 
 __all__ = [
@@ -23,8 +28,11 @@ __all__ = [
     "PolicyNetwork",
     "PortfolioPolicyConfig",
     "PortfolioPolicyNetwork",
+    "RegimeAwarePolicyConfig",
+    "RegimeAwarePolicyNetwork",
     "WorldModel",
     "WorldModelConfig",
     "build_default_policy",
     "build_default_portfolio_policy",
+    "build_regime_aware_policy",
 ]

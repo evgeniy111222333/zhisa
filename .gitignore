@@ -11,10 +11,10 @@ dist/
 .eggs/
 
 # Virtual envs
-.venv/
-venv/
-env/
-ENV/
+/.venv/
+/venv/
+/env/
+/ENV/
 
 # Test / coverage
 .pytest_cache/
@@ -62,4 +62,3 @@ secrets.*
 .pytest_full.log.err
 .pytest_full.log.out
 backtest_comparison.csv
-

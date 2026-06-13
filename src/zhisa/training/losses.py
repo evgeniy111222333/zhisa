@@ -15,6 +15,7 @@ class LossWeights:
     volatility: float = 0.5
     regime: float = 0.3
     return_pred: float = 0.5
+    risk: float = 0.25
     policy: float = 1.0
     value: float = 0.5
     uncertainty: float = 0.05
@@ -42,7 +43,7 @@ class MultiTaskLoss(nn.Module):
             self.log_vars = nn.ParameterDict({
                 k: nn.Parameter(torch.zeros(1)) for k in (
                     "direction", "volatility", "regime", "return_pred",
-                    "policy", "value",
+                    "risk", "policy", "value", "uncertainty",
                 )
             })
         else:
@@ -51,8 +52,10 @@ class MultiTaskLoss(nn.Module):
             self.register_buffer("_volatility_w", torch.tensor(w.volatility))
             self.register_buffer("_regime_w", torch.tensor(w.regime))
             self.register_buffer("_return_pred_w", torch.tensor(w.return_pred))
+            self.register_buffer("_risk_w", torch.tensor(w.risk))
             self.register_buffer("_policy_w", torch.tensor(w.policy))
             self.register_buffer("_value_w", torch.tensor(w.value))
+            self.register_buffer("_uncertainty_w", torch.tensor(w.uncertainty))
         self.weights = w
 
     def _w(self, key: str) -> torch.Tensor:
@@ -87,6 +90,29 @@ class MultiTaskLoss(nn.Module):
         if "return_pred" in outputs and "label_ret" in targets:
             losses["return_pred"] = F.smooth_l1_loss(
                 outputs["return_pred"], targets["label_ret"]
+            )
+        # Risk head: explicit downside-risk label when available; legacy
+        # batches derive it from downside return plus realised volatility.
+        if "risk" in outputs:
+            risk_tgt = targets.get("label_risk")
+            if risk_tgt is None and "label_ret" in targets:
+                risk_tgt = torch.relu(-targets["label_ret"])
+                if "label_vol" in targets:
+                    risk_tgt = risk_tgt + torch.relu(targets["label_vol"])
+            if risk_tgt is not None:
+                losses["risk"] = F.smooth_l1_loss(
+                    outputs["risk"], risk_tgt.to(outputs["risk"].device)
+                )
+        # Uncertainty head: predict log-variance for the return head.
+        if (
+            "uncertainty_logit" in outputs
+            and "return_pred" in outputs
+            and "label_ret" in targets
+        ):
+            log_var = outputs["uncertainty_logit"].clamp(min=-10.0, max=10.0)
+            err = outputs["return_pred"] - targets["label_ret"].to(log_var.device)
+            losses["uncertainty"] = 0.5 * torch.mean(
+                torch.exp(-log_var) * err.pow(2) + log_var
             )
         # Policy imitation: cross-entropy
         if "policy_logits" in outputs and "action" in targets:

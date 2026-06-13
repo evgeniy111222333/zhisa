@@ -16,6 +16,15 @@ from zhisa.models.policy import build_default_policy
 from zhisa.utils.seeding import set_seed
 
 
+def _checkpoint_policy_config(ckpt: dict) -> dict:
+    """Return the saved PolicyConfig dict from a checkpoint, if present."""
+    for key in ("model_config", "policy_config", "config"):
+        cfg = ckpt.get(key)
+        if isinstance(cfg, dict) and "window" in cfg and "in_numeric_features" in cfg:
+            return cfg
+    return {}
+
+
 def _random_policy(seed: int = 0):
     rng = np.random.default_rng(seed)
 
@@ -51,24 +60,27 @@ def main(argv: list[str] | None = None) -> int:
     set_seed(args.seed)
     df = generate_market(MarketConfig(n_bars=args.bars, seed=args.seed))
 
+    env_cfg = EnvConfig(seed=args.seed)
     if args.checkpoint and Path(args.checkpoint).exists():
         ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("config", {}) or {}
+        cfg = _checkpoint_policy_config(ckpt)
         model = build_default_policy(
             in_numeric_features=int(cfg.get("in_numeric_features", 32)),
             in_context_features=int(cfg.get("in_context_features", 10)),
             window=int(cfg.get("window", 32)),
-            image_size=int(cfg.get("image_size", 32)),
+            image_size=int(cfg.get("image_size", EnvConfig.image_size)),
             n_actions=int(cfg.get("n_actions", 9)),
             n_regime_classes=int(cfg.get("n_regime_classes", 4)),
         )
         model.load_state_dict(ckpt["model"])
         policy = _model_policy(model)
+        env_cfg.window = int(cfg.get("window", env_cfg.window))
+        env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
     else:
         policy = _random_policy(args.seed)
         print("No checkpoint provided; using random policy for smoke test.")
 
-    result = run_backtest(df, policy, cfg=EnvConfig(seed=args.seed))
+    result = run_backtest(df, policy, cfg=env_cfg)
     print_metrics(result.metrics, title="policy")
     bh = buy_and_hold_benchmark(df)
     bh_metrics = compute_metrics(bh)

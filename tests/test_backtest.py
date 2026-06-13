@@ -1,13 +1,17 @@
 """Tests for the backtest engine, metrics, and splitters."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+import torch
 
 from zhisa.backtest.engine import run_backtest, _extract_trade_returns, buy_and_hold_benchmark
 from zhisa.backtest.metrics import compute_metrics
 from zhisa.backtest.splitter import SplitSpec, walk_forward_splits, purged_kfold_indices
 from zhisa.env.trading_env import EnvConfig
+from zhisa.models.policy import build_default_policy
 
 
 def test_metrics_basic():
@@ -70,3 +74,86 @@ def test_extract_trade_returns():
     assert tr.size >= 1
     # First trade was long; PnL positive
     assert tr[0] > 0
+
+
+def test_backtest_script_uses_model_config_for_env(tmp_path, monkeypatch, small_market):
+    from zhisa.scripts import backtest as backtest_script
+
+    model_cfg = {
+        "in_numeric_features": 32,
+        "in_context_features": 10,
+        "window": 8,
+        "image_size": 16,
+        "n_actions": 9,
+        "n_regime_classes": 4,
+    }
+    model = build_default_policy(**model_cfg)
+    ckpt = tmp_path / "model.pt"
+    torch.save({
+        "model": model.state_dict(),
+        "model_config": model_cfg,
+        # Legacy field deliberately disagrees; model_config must win.
+        "config": {**model_cfg, "window": 32, "image_size": 64},
+    }, ckpt)
+
+    captured: dict = {}
+    dummy_equity = np.array([1.0, 1.01, 1.02, 1.015, 1.03])
+
+    def fake_run_backtest(df, policy, cfg, *, seed=0):
+        captured["cfg"] = cfg
+        return SimpleNamespace(metrics=compute_metrics(dummy_equity))
+
+    monkeypatch.setattr(backtest_script, "generate_market", lambda cfg: small_market)
+    monkeypatch.setattr(backtest_script, "run_backtest", fake_run_backtest)
+
+    rc = backtest_script.main([
+        "--checkpoint", str(ckpt),
+        "--bars", "120",
+        "--out", "",
+    ])
+
+    assert rc == 0
+    assert captured["cfg"].window == model_cfg["window"]
+    assert captured["cfg"].image_size == model_cfg["image_size"]
+
+
+def test_evaluate_script_uses_model_config_for_env(tmp_path, monkeypatch, small_market):
+    from zhisa.scripts import evaluate as evaluate_script
+
+    model_cfg = {
+        "in_numeric_features": 32,
+        "in_context_features": 10,
+        "window": 8,
+        "image_size": 16,
+        "n_actions": 9,
+        "n_regime_classes": 4,
+    }
+    model = build_default_policy(**model_cfg)
+    ckpt = tmp_path / "model.pt"
+    torch.save({
+        "model": model.state_dict(),
+        "model_config": model_cfg,
+        "config": {**model_cfg, "window": 32, "image_size": 64},
+    }, ckpt)
+
+    captured: dict = {}
+    dummy_equity = np.array([1.0, 1.01, 1.02, 1.015, 1.03])
+
+    def fake_run_backtest(df, policy, cfg, *, seed=0):
+        captured["cfg"] = cfg
+        return SimpleNamespace(metrics=compute_metrics(dummy_equity))
+
+    monkeypatch.setattr(evaluate_script, "generate_market", lambda cfg: small_market)
+    monkeypatch.setattr(evaluate_script, "run_backtest", fake_run_backtest)
+
+    out = tmp_path / "eval.json"
+    rc = evaluate_script.main([
+        "--checkpoint", str(ckpt),
+        "--bars", "120",
+        "--out", str(out),
+    ])
+
+    assert rc == 0
+    assert captured["cfg"].window == model_cfg["window"]
+    assert captured["cfg"].image_size == model_cfg["image_size"]
+    assert out.exists()

@@ -36,14 +36,11 @@ def test_encode_decode_round_trip():
             assert encode_multi_action(digits) == code
 
 
-def test_encode_zero_is_all_close():
-    """Action 0 must correspond to CLOSE on every instrument."""
+def test_encode_zero_is_all_skip():
+    """Action 0 must correspond to SKIP on every instrument."""
     digits = decode_multi_action(0, 3)
     assert digits == [0, 0, 0]
-    assert all(DiscreteAction(d) == DiscreteAction.LONG_25 for d in digits) or True
-    # 0 is the first DiscreteAction, which is LONG_25 (see actions.py).
-    # The semantic "all close" is action code 6 (DiscreteAction.CLOSE = 6).
-    # Just ensure decoding is consistent.
+    assert all(DiscreteAction(d) == DiscreteAction.SKIP for d in digits)
     assert encode_multi_action(digits) == 0
 
 
@@ -132,7 +129,7 @@ def test_portfolio_env_random_rollout_completes():
 
 
 def test_portfolio_env_close_action_closes_all():
-    """Action code ``6 * 9 + 6 = 60`` is CLOSE on both instruments."""
+    """A CLOSE action on every instrument closes all open positions."""
     cfg = PortfolioConfig(
         env_cfg=EnvConfig(window=8, image_size=8, risk_limits=RiskLimits(max_drawdown=1.0)),
     )
@@ -148,6 +145,25 @@ def test_portfolio_env_close_action_closes_all():
                                     int(DiscreteAction.CLOSE)]))
     assert env._instrument_position(0) == 0
     assert env._instrument_position(1) == 0
+
+
+def test_portfolio_env_skip_holds_open_positions():
+    cfg = PortfolioConfig(
+        env_cfg=EnvConfig(
+            window=8, image_size=8,
+            kill_on_drawdown=False,
+            risk_limits=RiskLimits(max_drawdown=1.0),
+        ),
+    )
+    env = PortfolioEnv(_two_markets(), cfg=cfg)
+    env.reset(seed=0)
+    env.step(encode_multi_action([int(DiscreteAction.LONG_100),
+                                  int(DiscreteAction.SHORT_100)]))
+    before = [env._instrument_position(0), env._instrument_position(1)]
+    _, _, _, _, info = env.step(encode_multi_action([int(DiscreteAction.SKIP),
+                                                     int(DiscreteAction.SKIP)]))
+    assert [env._instrument_position(0), env._instrument_position(1)] == before
+    assert info["per_instrument_position"] == before
 
 
 def test_portfolio_env_gross_leverage_caps_action():
@@ -169,6 +185,30 @@ def test_portfolio_env_gross_leverage_caps_action():
                                     int(DiscreteAction.LONG_100)]))
     assert env._instrument_position(0) == 0
     assert env._instrument_position(1) == 0
+
+
+def test_portfolio_risk_rejection_holds_existing_positions():
+    cfg = PortfolioConfig(
+        env_cfg=EnvConfig(
+            window=8, image_size=8,
+            max_leverage=1.0,
+            risk_limits=RiskLimits(max_drawdown=1.0),
+            kill_on_drawdown=False,
+        ),
+        gross_leverage_cap=1.5,
+    )
+    env = PortfolioEnv(_two_markets(), cfg=cfg)
+    env.reset(seed=0)
+    env.step(encode_multi_action([int(DiscreteAction.LONG_50),
+                                  int(DiscreteAction.LONG_50)]))
+    before = [env._instrument_position(0), env._instrument_position(1)]
+    assert before == [0.5, 0.5]
+
+    # Moving both legs to LONG_100 would breach the gross cap and must
+    # be rejected as a no-op, not converted to a close.
+    env.step(encode_multi_action([int(DiscreteAction.LONG_100),
+                                  int(DiscreteAction.LONG_100)]))
+    assert [env._instrument_position(0), env._instrument_position(1)] == before
 
 
 def test_portfolio_env_portfolio_summary_components():

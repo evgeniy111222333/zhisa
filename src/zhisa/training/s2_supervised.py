@@ -70,6 +70,7 @@ class SupervisedTrainer:
             "context": batch.context.to(self.device, non_blocking=True),
             "label_dir": batch.label_dir.to(self.device, non_blocking=True),
             "label_vol": batch.label_vol.to(self.device, non_blocking=True),
+            "label_risk": batch.label_risk.to(self.device, non_blocking=True),
             "label_regime": batch.label_regime.to(self.device, non_blocking=True),
             "label_ret": batch.label_ret.to(self.device, non_blocking=True),
         }

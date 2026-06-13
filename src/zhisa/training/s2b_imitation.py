@@ -52,7 +52,7 @@ def _batched_collate(batch: list[dict]) -> dict:
     """
     keys_tensor = (
         "chart", "numeric", "context",
-        "label_dir", "label_vol", "label_regime", "label_ret", "mask",
+        "label_dir", "label_vol", "label_risk", "label_regime", "label_ret", "mask",
         "action",
     )
     out: dict = {}
@@ -220,6 +220,7 @@ def _train_bc_one_epoch(
         targets = {
             "label_dir": batch["label_dir"].to(device, non_blocking=device.type == "cuda"),
             "label_vol": batch["label_vol"].to(device, non_blocking=device.type == "cuda"),
+            "label_risk": batch["label_risk"].to(device, non_blocking=device.type == "cuda"),
             "label_regime": batch["label_regime"].to(device, non_blocking=device.type == "cuda"),
             "label_ret": batch["label_ret"].to(device, non_blocking=device.type == "cuda"),
             "action": action,
@@ -417,6 +418,7 @@ class _AggregatedPairs(Dataset):
             "context": torch.from_numpy(self.ctxs[i]).float(),
             "label_dir": torch.tensor(1, dtype=torch.long),  # 1 == "0" after offset
             "label_vol": torch.tensor(0.0, dtype=torch.float32),
+            "label_risk": torch.tensor(0.0, dtype=torch.float32),
             "label_regime": torch.tensor(0, dtype=torch.long),
             "label_ret": torch.tensor(0.0, dtype=torch.float32),
             "mask": torch.ones(T, dtype=torch.bool),

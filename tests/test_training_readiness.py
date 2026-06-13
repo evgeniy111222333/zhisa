@@ -197,6 +197,8 @@ class TestGradientFlow:
             + out["regime"].sum()
             + out["volatility"].sum()
             + out["return_pred"].sum()
+            + out["risk"].sum()
+            + out["uncertainty_logit"].sum()
         )
         loss.backward()
 
@@ -245,6 +247,7 @@ class TestGradientFlow:
         targets = {
             "label_dir": torch.randint(-1, 2, (8,)),
             "label_vol": torch.randn(8).abs(),
+            "label_risk": torch.randn(8).abs(),
             "label_regime": torch.randint(0, 4, (8,)),
             "label_ret": torch.randn(8) * 0.01,
         }
@@ -292,6 +295,7 @@ class TestMiniTraining:
         targets = {
             "label_dir": torch.randint(-1, 2, (B,)),
             "label_vol": torch.randn(B).abs() * 0.01,
+            "label_risk": torch.randn(B).abs() * 0.01,
             "label_regime": torch.randint(0, 4, (B,)),
             "label_ret": torch.randn(B) * 0.001,
         }
@@ -370,6 +374,8 @@ class TestDatasetPipeline:
         assert sample["numeric"].shape[0] == 64  # window
         assert sample["label_dir"].dtype == torch.long
         assert sample["label_vol"].dtype == torch.float32
+        assert sample["label_risk"].dtype == torch.float32
+        assert sample["label_risk"].item() >= 0.0
         assert sample["label_regime"].dtype == torch.long
 
     def test_dataset_no_nan_in_samples(self, synth_df):
@@ -402,6 +408,7 @@ class TestDatasetPipeline:
         assert batch.chart.shape == (4, 3, 64, 64)
         assert batch.numeric.shape[0] == 4
         assert batch.label_dir.shape == (4,)
+        assert batch.label_risk.shape == (4,)
         assert len(batch.meta) == 4
 
     def test_dataloader_iteration(self, synth_df):
@@ -650,12 +657,15 @@ class TestNumericalStability:
             "volatility": torch.randn(B),
             "regime": torch.randn(B, 4),
             "return_pred": torch.randn(B),
+            "risk": torch.randn(B),
             "policy_logits": torch.randn(B, 9),
             "value": torch.randn(B),
+            "uncertainty_logit": torch.randn(B),
         }
         targets = {
             "label_dir": torch.zeros(B, dtype=torch.long),
             "label_vol": torch.zeros(B),
+            "label_risk": torch.zeros(B),
             "label_regime": torch.zeros(B, dtype=torch.long),
             "label_ret": torch.zeros(B),
         }

@@ -55,6 +55,7 @@ class MultimodalBatch:
     label_vol: torch.Tensor     # (B,) float -- forward realised vol
     label_regime: torch.Tensor  # (B,) long
     label_ret: torch.Tensor     # (B,) float -- forward return
+    label_risk: torch.Tensor    # (B,) float -- downside return + realised vol
     mask: torch.Tensor          # (B, T) bool -- which time steps are valid
     meta: list                  # per-sample metadata (symbol, ts, ...)
 
@@ -135,6 +136,7 @@ class MarketDataset(Dataset):
         lbl_dir = int(self._tb["label"].iloc[primary_idx])
         lbl_ret = float(self._tb["ret"].iloc[primary_idx])
         lbl_vol = float(self._vol.iloc[primary_idx]) if not np.isnan(self._vol.iloc[primary_idx]) else 0.0
+        lbl_risk = max(-lbl_ret, 0.0) + max(lbl_vol, 0.0)
         lbl_regime = int(self._regime.iloc[primary_idx])
 
         mask = np.ones(spec.chart_window, dtype=bool)
@@ -145,6 +147,7 @@ class MarketDataset(Dataset):
             "label_dir": torch.tensor(lbl_dir, dtype=torch.long),
             "label_ret": torch.tensor(lbl_ret, dtype=torch.float32),
             "label_vol": torch.tensor(lbl_vol, dtype=torch.float32),
+            "label_risk": torch.tensor(lbl_risk, dtype=torch.float32),
             "label_regime": torch.tensor(lbl_regime, dtype=torch.long),
             "mask": torch.from_numpy(mask),
             "meta": {
@@ -158,7 +161,7 @@ class MarketDataset(Dataset):
 def multimodal_collate(batch: Sequence[dict]) -> MultimodalBatch:
     """Default collate: stack all tensors, list metas."""
     keys_tensor = ("chart", "numeric", "context", "label_dir", "label_ret",
-                   "label_vol", "label_regime", "mask")
+                   "label_vol", "label_risk", "label_regime", "mask")
     out: dict = {}
     for k in keys_tensor:
         out[k] = torch.stack([b[k] for b in batch], dim=0)

@@ -16,6 +16,15 @@ from zhisa.models.policy import build_default_policy
 from zhisa.utils.seeding import set_seed
 
 
+def _checkpoint_policy_config(ckpt: dict) -> dict:
+    """Return the saved PolicyConfig dict from a checkpoint, if present."""
+    for key in ("model_config", "policy_config", "config"):
+        cfg = ckpt.get(key)
+        if isinstance(cfg, dict) and "window" in cfg and "in_numeric_features" in cfg:
+            return cfg
+    return {}
+
+
 def _model_policy(model, device: str = "cpu"):
     model.eval()
     model.to(device)
@@ -41,22 +50,25 @@ def main(argv: list[str] | None = None) -> int:
     set_seed(0)
     df = generate_market(MarketConfig(n_bars=args.bars))
     policy = None
+    env_cfg = EnvConfig()
     if args.checkpoint and Path(args.checkpoint).exists():
         ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("config", {}) or {}
+        cfg = _checkpoint_policy_config(ckpt)
         model = build_default_policy(
             in_numeric_features=int(cfg.get("in_numeric_features", 32)),
             in_context_features=int(cfg.get("in_context_features", 10)),
             window=int(cfg.get("window", 32)),
-            image_size=int(cfg.get("image_size", 32)),
+            image_size=int(cfg.get("image_size", EnvConfig.image_size)),
         )
         model.load_state_dict(ckpt["model"])
         policy = _model_policy(model)
+        env_cfg.window = int(cfg.get("window", env_cfg.window))
+        env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
     if policy is None:
         rng = np.random.default_rng(0)
         def policy(_obs):
             return int(rng.integers(0, 9))
-    result = run_backtest(df, policy, cfg=EnvConfig())
+    result = run_backtest(df, policy, cfg=env_cfg)
     print_metrics(result.metrics, title="evaluation")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:

@@ -11,6 +11,8 @@ from zhisa.models.fusion import CrossModalFusion
 from zhisa.models.heads import MultiTaskHeads
 from zhisa.models.memory import WorkingMemory
 from zhisa.models.policy import PolicyConfig, PolicyNetwork, build_default_policy
+from zhisa.models.regime_policy import RegimeAwarePolicyConfig, RegimeAwarePolicyNetwork
+from zhisa.regime.encoder import RegimeEncoderConfig
 
 
 def test_vision_encoder_shapes():
@@ -90,3 +92,35 @@ def test_policy_backward_step():
     loss.backward()
     grads = [p.grad for p in model.parameters() if p.requires_grad]
     assert any(g is not None and g.abs().sum() > 0 for g in grads)
+
+
+def test_regime_aware_policy_appends_regime_context_and_backpropagates():
+    cfg = RegimeAwarePolicyConfig(
+        base_policy=PolicyConfig(
+            in_numeric_features=12,
+            in_context_features=8,
+            window=16,
+            image_size=16,
+            embed_dim=32,
+            n_actions=5,
+            use_memory=False,
+            dropout=0.0,
+        ),
+        regime_encoder=RegimeEncoderConfig(embed_dim=8, hidden_dim=24, dropout=0.0),
+    )
+    model = RegimeAwarePolicyNetwork(cfg)
+    chart = torch.rand(3, 3, 16, 16)
+    numeric = torch.rand(3, 16, 12)
+    context = torch.rand(3, 8)
+    regime = torch.rand(3, model.regime_encoder.input_dim)
+
+    out = model(chart=chart, numeric=numeric, context=context, regime=regime)
+    loss = out["policy_logits"].sum() + out["value"].sum() + out["regime_embedding"].sum()
+    loss.backward()
+
+    assert model.policy.cfg.in_context_features == 16
+    assert out["policy_logits"].shape == (3, 5)
+    assert out["regime_embedding"].shape == (3, 8)
+    assert out["regime_macro_logits"].shape[0] == 3
+    regime_grads = [p.grad for p in model.regime_encoder.parameters() if p.requires_grad]
+    assert any(g is not None and g.abs().sum() > 0 for g in regime_grads)
