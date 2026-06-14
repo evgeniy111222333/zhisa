@@ -38,6 +38,7 @@ ml = [
 ]
 exchange = [
     "ccxt>=4.4.0",
+    "websockets>=12.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -64,6 +65,7 @@ zhisa-eval = "zhisa.scripts.evaluate:main"
 zhisa-backtest = "zhisa.scripts.backtest:main"
 zhisa-ingest-real-data = "zhisa.scripts.ingest_real_data:main"
 zhisa-ingest-binance-futures-context = "zhisa.scripts.ingest_binance_futures_context:main"
+zhisa-live-shadow = "zhisa.scripts.live_shadow:main"
 zhisa-monitor-real-data = "zhisa.scripts.monitor_real_data:main"
 zhisa-paper-run = "zhisa.scripts.paper_run:main"
 

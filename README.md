@@ -115,6 +115,28 @@ zhisa-monitor-real-data \
   --bars 5000 \
   --scan-bars 1000 \
   --out artifacts/monitor/crypto_5m
+
+# 6) Watch the live market and send decisions to a local paper broker
+zhisa-live-shadow \
+  --exchange binance_usdm \
+  --symbols BTCUSDT,ETHUSDT,SOLUSDT \
+  --timeframe 5m \
+  --duration-sec 300 \
+  --broker local_paper \
+  --out artifacts/live_shadow/binance_usdm_paper
+
+# Optional: mirror filled local-paper orders to OKX demo trading only.
+# Requires OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE from an OKX
+# simulated account. The adapter sends x-simulated-trading: 1.
+zhisa-live-shadow \
+  --exchange okx_demo \
+  --symbols BTC-USDT-SWAP,ETH-USDT-SWAP,SOL-USDT-SWAP \
+  --timeframe 5m \
+  --duration-sec 300 \
+  --broker okx_demo \
+  --okx-fixed-size 1 \
+  --i-understand-okx-demo-orders \
+  --out artifacts/live_shadow/okx_demo_mirror
 ```
 
 The Binance futures context ingest stores public, no-key derivatives
@@ -123,6 +145,12 @@ open interest, long/short ratios, and taker buy/sell flow under
 `data/futures_context/binance_usdm/{SYMBOL}/{timeframe}/context.parquet`.
 It also writes an audit JSON with exact columns, ranges, null counts, and
 known unavailable endpoints.
+
+`zhisa-live-shadow` listens to public live WebSocket market data, builds
+closed-bar decisions, executes them in a local paper ledger, and writes
+events, bars, decisions, orders, equity, and resolved experience samples.
+It never needs API keys in `local_paper` mode. OKX demo mirroring is
+explicit opt-in and requires simulated-account keys.
 
 The same `--data-source tsdb|csv` arguments are available on S1, S2,
 S2b, S4, S4-CVaR, `zhisa-backtest`, and `zhisa-eval`.
