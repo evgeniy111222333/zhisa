@@ -68,6 +68,7 @@ class RegimePolicyTargetConfig:
     transition_wait_threshold: float = 0.55
     no_trade_tradeability_threshold: float = 0.25
     default_playbook_prior: float = 0.5
+    unknown_playbook_fallback: str = "no_trade_wait"
     max_scale_in_steps: float = 3.0
     max_slippage_bps: float = SLIPPAGE_BUCKETS_BPS[-1]
 
@@ -76,6 +77,8 @@ class RegimePolicyTargetConfig:
             raise ValueError("max_scale_in_steps must be positive")
         if self.max_slippage_bps <= 0:
             raise ValueError("max_slippage_bps must be positive")
+        if self.unknown_playbook_fallback not in PLAYBOOK_TO_ID:
+            raise ValueError(f"unknown_playbook_fallback must be known, got {self.unknown_playbook_fallback!r}")
 
 
 class RegimePolicyHeads(nn.Module):
@@ -139,6 +142,7 @@ def build_regime_policy_targets(
     """Convert regime reports/plans into auxiliary policy-training targets."""
     cfg = cfg or RegimePolicyTargetConfig()
     playbook_labels: list[int] = []
+    playbook_fallback: list[float] = []
     playbook_prior: list[float] = []
     risk_budget: list[float] = []
     tradeability: list[float] = []
@@ -160,9 +164,13 @@ def build_regime_policy_targets(
         playbook = plan.recommended_playbook if plan is not None else ""
         if not playbook and isinstance(playbook_utility, dict) and playbook_utility:
             playbook = max(playbook_utility, key=lambda k: float(playbook_utility.get(k, -1e9)))
+        fallback_used = False
         if playbook not in PLAYBOOK_TO_ID:
-            playbook = next((p for p in report.allowed_playbooks if p in PLAYBOOK_TO_ID), "no_trade_wait")
+            replacement = next((p for p in report.allowed_playbooks if p in PLAYBOOK_TO_ID), cfg.unknown_playbook_fallback)
+            fallback_used = replacement == cfg.unknown_playbook_fallback
+            playbook = replacement
         playbook_labels.append(int(PLAYBOOK_TO_ID.get(playbook, PLAYBOOK_TO_ID["no_trade_wait"])))
+        playbook_fallback.append(float(fallback_used))
         prior_dict = {}
         if plan is not None and plan.setups:
             for setup in plan.setups:
@@ -202,6 +210,7 @@ def build_regime_policy_targets(
         masks.append(regime_action_mask(report, current_position=pos, n_actions=n_actions))
     return {
         "regime_playbook_label": torch.as_tensor(playbook_labels, dtype=torch.long, device=device),
+        "regime_playbook_fallback": _as_batch_tensor(playbook_fallback, device=device),
         "regime_playbook_prior": _as_batch_tensor(playbook_prior, device=device),
         "regime_risk_budget": _as_batch_tensor(risk_budget, device=device),
         "regime_tradeability": _as_batch_tensor(tradeability, device=device),

@@ -213,7 +213,7 @@ class RegimeTradePlanner:
         status = "tradeable" if setups and not no_trade else "no_trade"
         if setups and no_trade and float(report.tradeability_score) >= self.cfg.min_tradeability * 1.5:
             status = "conditional"
-        recommended = setups[0] if setups else None
+        recommended = setups[0] if setups and status in {"tradeable", "conditional"} else None
         recommended_action = self._recommended_action(recommended, mask, current_position)
         execution = self._execution_plan(report, recommended, status, current_position, risk_budget)
         position_management = self._position_management(report, recommended, status, current_position, risk_budget)
@@ -279,7 +279,7 @@ class RegimeTradePlanner:
     ) -> TradeSetup | None:
         direction = self._direction(playbook, report)
         actions = self._actions_for_direction(direction, mask)
-        if not actions and risk_budget <= 1e-6:
+        if not actions and playbook not in TACTICAL_PLAYBOOKS:
             return None
         target = self._target_position(direction, risk_budget)
         score = self._score(report, playbook, direction, risk_budget, prior)

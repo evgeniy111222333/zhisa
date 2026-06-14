@@ -104,6 +104,8 @@ def test_trade_planner_no_trade_when_tradeability_too_low() -> None:
 
     assert plan.status == "no_trade"
     assert "tradeability below threshold" in plan.no_trade_reasons
+    assert plan.recommended_playbook == "no_trade_wait"
+    assert all(not setup.allowed_actions for setup in plan.setups)
     assert plan.recommended_action in {
         int(DiscreteAction.CLOSE),
         int(DiscreteAction.PARTIAL_CLOSE),

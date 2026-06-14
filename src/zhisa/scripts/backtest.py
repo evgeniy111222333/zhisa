@@ -12,9 +12,10 @@ from zhisa.backtest.engine import buy_and_hold_benchmark, run_backtest
 from zhisa.backtest.metrics import compute_metrics
 from zhisa.backtest.reports import print_metrics, save_report
 from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
-from zhisa.data.synthetic import MarketConfig, generate_market
+from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.utils.seeding import set_seed
 
 
@@ -63,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--out", type=str, default="artifacts/backtest")
     parser.add_argument("--seed", type=int, default=0)
+    add_market_data_args(parser)
     parser.add_argument(
         "--regime-ab",
         action="store_true",
@@ -71,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     set_seed(args.seed)
-    df = generate_market(MarketConfig(n_bars=args.bars, seed=args.seed))
+    df = load_market_dataframe(args, seed=args.seed, default_bars=args.bars)
 
     env_cfg = EnvConfig(seed=args.seed)
     if args.checkpoint and Path(args.checkpoint).exists():

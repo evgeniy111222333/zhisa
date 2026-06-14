@@ -19,10 +19,10 @@ import sys
 from pathlib import Path
 
 from zhisa.config import load_config
-from zhisa.data.dataset import MarketDataset, SampleSpec
-from zhisa.data.synthetic import MarketConfig, generate_market
-from zhisa.env.trading_env import EnvConfig
+from zhisa.data.dataset import SampleSpec
+from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.optim import OptimConfig
 from zhisa.training.s4_rl import PPOConfig, PPOTrainer
 from zhisa.utils.seeding import set_seed
@@ -86,7 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=str, default="configs/s4_rl.yaml")
     parser.add_argument("--n-episodes", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--bars", type=int, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s4/policy.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -96,16 +98,21 @@ def main(argv: list[str] | None = None) -> int:
 
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
-    n_bars = int(cfg.get("n_bars", 1500)) if cfg else 1500
+    n_bars = int(args.bars or (cfg.get("n_bars", 1500) if cfg else 1500))
+    df = load_market_dataframe(args, seed=seed, default_bars=n_bars)
 
     spec = SampleSpec(chart_window=chart_window, feature_window=chart_window,
                       image_size=image_size)
 
-    # Probe feature dim with a tiny market.
-    probe_df = generate_market(MarketConfig(n_bars=300, seed=seed))
-    probe_ds = MarketDataset(probe_df, spec=spec)
-    n_feat = probe_ds._features.shape[1]
-    n_ctx = probe_ds._time_features.shape[1]
+    env_cfg = _build_env_cfg(cfg)
+    env_cfg.window = chart_window
+    env_cfg.image_size = image_size
+
+    # Probe feature dim on a small slice of the same env data contract.
+    probe_len = min(len(df), max(chart_window + 80, 128))
+    probe_env = TradingEnv(df.iloc[:probe_len], cfg=env_cfg)
+    n_feat = probe_env.obs_numeric_dim
+    n_ctx = probe_env.obs_context_dim
 
     model = build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,
@@ -113,11 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         n_actions=9, n_regime_classes=spec.n_regime_states,
     )
 
-    env_cfg = _build_env_cfg(cfg)
     ppo_cfg = _build_ppo_cfg(cfg, args, env_cfg)
-
-    # Fresh market per training run.
-    df = generate_market(MarketConfig(n_bars=n_bars, seed=seed))
 
     trainer = PPOTrainer(model, ppo_cfg)
     result = trainer.fit(df)

@@ -36,12 +36,15 @@ ml = [
     "gymnasium>=0.29",
     "optuna>=4.0",
 ]
+exchange = [
+    "ccxt>=4.4.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-benchmark>=4.0",
     "pytest-cov>=4.1",
 ]
-all = ["zhisa[ml,dev]"]
+all = ["zhisa[ml,dev,exchange]"]
 
 [project.scripts]
 zhisa-train-s1 = "zhisa.scripts.train_s1:main"
@@ -59,6 +62,10 @@ zhisa-explain = "zhisa.scripts.explain:main"
 zhisa-run-pipeline = "zhisa.scripts.run_pipeline:main"
 zhisa-eval = "zhisa.scripts.evaluate:main"
 zhisa-backtest = "zhisa.scripts.backtest:main"
+zhisa-ingest-real-data = "zhisa.scripts.ingest_real_data:main"
+zhisa-ingest-binance-futures-context = "zhisa.scripts.ingest_binance_futures_context:main"
+zhisa-monitor-real-data = "zhisa.scripts.monitor_real_data:main"
+zhisa-paper-run = "zhisa.scripts.paper_run:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

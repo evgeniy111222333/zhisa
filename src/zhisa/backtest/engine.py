@@ -19,6 +19,7 @@ class BacktestResult:
     equity: np.ndarray
     positions: np.ndarray
     prices: np.ndarray
+    actions: np.ndarray
     timestamps: Optional[np.ndarray]
     rewards: np.ndarray
     info: list[dict]
@@ -67,6 +68,7 @@ def run_backtest(
     equity = [env._equity]
     positions = [env._position]
     prices = [float(df["close"].iloc[env._t])]
+    actions = [-1]
     rewards = [0.0]
     info_hist: list[dict] = []
     n_nan_clipped = 0
@@ -105,6 +107,7 @@ def run_backtest(
         equity.append(eq)
         positions.append(info["position"])
         prices.append(info["price"])
+        actions.append(action)
         rewards.append(r if np.isfinite(r) else 0.0)
         done = bool(terminated or truncated)
 
@@ -117,6 +120,7 @@ def run_backtest(
     equity_arr = np.asarray(equity, dtype=np.float64)
     positions_arr = np.asarray(positions, dtype=np.float64)
     prices_arr = np.asarray(prices, dtype=np.float64)
+    actions_arr = np.asarray(actions, dtype=np.int64)
     rewards_arr = np.asarray(rewards, dtype=np.float64)
 
     # Trade returns: change in PnL between position opens and closes
@@ -131,6 +135,7 @@ def run_backtest(
         equity=equity_arr,
         positions=positions_arr,
         prices=prices_arr,
+        actions=actions_arr,
         timestamps=timestamps,
         rewards=rewards_arr,
         info=info_hist,

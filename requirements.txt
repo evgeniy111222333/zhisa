@@ -10,6 +10,9 @@ tqdm>=4.66
 torch>=2.2
 gymnasium>=0.29
 
+# Exchange data ingest (public OHLCV only)
+ccxt>=4.4.0
+
 # Dev / test
 pytest>=8.0
 pytest-benchmark>=4.0

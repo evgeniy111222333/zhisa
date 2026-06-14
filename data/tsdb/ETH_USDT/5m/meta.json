@@ -1,0 +1,18 @@
+{
+  "instrument": "ETH/USDT",
+  "timeframe": "5m",
+  "start": "2026-04-06T00:00:00+00:00",
+  "end": "2026-06-14T10:35:00+00:00",
+  "row_count": 20000,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 766454,
+  "checksum": "46706f19c1b725c12b3724e454346e7f",
+  "created_at": "2026-06-14T19:39:36.811164+00:00",
+  "updated_at": "2026-06-14T19:39:36.811164+00:00"
+}

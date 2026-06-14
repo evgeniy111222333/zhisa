@@ -92,6 +92,84 @@ class RegimeGatedPolicy:
         self.actions_final: list[int] = []
         self.masked_count = 0
 
+    @staticmethod
+    def _target_for_action(action: int, current_position: float) -> float:
+        if int(action) == int(DiscreteAction.SKIP):
+            return float(current_position)
+        if int(action) == int(DiscreteAction.PARTIAL_CLOSE):
+            return 0.5 * float(current_position)
+        mapping = {
+            int(DiscreteAction.LONG_25): 0.25,
+            int(DiscreteAction.LONG_50): 0.50,
+            int(DiscreteAction.LONG_100): 1.00,
+            int(DiscreteAction.SHORT_25): -0.25,
+            int(DiscreteAction.SHORT_50): -0.50,
+            int(DiscreteAction.SHORT_100): -1.00,
+            int(DiscreteAction.CLOSE): 0.0,
+        }
+        return float(mapping.get(int(action), 0.0))
+
+    @classmethod
+    def _is_reducing(cls, action: int, current_position: float) -> bool:
+        current = float(current_position)
+        if abs(current) <= 1e-9:
+            return False
+        target = cls._target_for_action(action, current)
+        if abs(target) <= 1e-9:
+            return True
+        return np.sign(target) == np.sign(current) and abs(target) < abs(current) - 1e-9
+
+    @classmethod
+    def _preferred_reduce_action(
+        cls,
+        mask: np.ndarray,
+        *,
+        current_position: float,
+        reduce_to: float,
+    ) -> int:
+        candidates = [
+            a for a in range(mask.size)
+            if bool(mask[a]) and cls._is_reducing(a, current_position)
+        ]
+        if not candidates:
+            return int(DiscreteAction.SKIP)
+        return int(min(
+            candidates,
+            key=lambda a: abs(cls._target_for_action(a, current_position) - float(reduce_to)),
+        ))
+
+    @classmethod
+    def _planned_management_action(
+        cls,
+        plan: TradePlan,
+        mask: np.ndarray,
+        *,
+        current_action: int,
+        current_position: float,
+    ) -> int:
+        current = float(current_position)
+        if abs(current) <= 1e-9 and plan.status == "no_trade":
+            return int(DiscreteAction.SKIP) if bool(mask[int(DiscreteAction.SKIP)]) else int(current_action)
+
+        must_reduce = bool(
+            plan.position_management.de_risk_required
+            or plan.position_management.intent == "reduce"
+        )
+        if must_reduce and not cls._is_reducing(current_action, current):
+            return cls._preferred_reduce_action(
+                mask,
+                current_position=current,
+                reduce_to=float(plan.position_management.reduce_to),
+            )
+
+        if plan.status == "no_trade":
+            target = cls._target_for_action(current_action, current)
+            increases = abs(target) > abs(current) + 1e-9
+            flips = abs(current) > 1e-9 and abs(target) > 1e-9 and np.sign(target) != np.sign(current)
+            if increases or flips:
+                return int(DiscreteAction.SKIP) if bool(mask[int(DiscreteAction.SKIP)]) else int(current_action)
+        return int(current_action)
+
     def _report(self, env: TradingEnv) -> RegimeReport:
         # Observation at env._t contains bars [env._t-window, env._t),
         # so use env._t - 1 to avoid leaking the execution bar.
@@ -135,6 +213,12 @@ class RegimeGatedPolicy:
             raw_action = int(self.base_policy(obs))
             action = raw_action if 0 <= raw_action < mask.size and bool(mask[raw_action]) else self._valid_fallback(mask, current_position)
 
+        action = self._planned_management_action(
+            plan,
+            mask,
+            current_action=action,
+            current_position=current_position,
+        )
         if action != raw_action:
             self.masked_count += 1
         self.reports.append(report)

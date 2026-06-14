@@ -1,6 +1,8 @@
 """Tests for outcome-learned regime intelligence."""
 from __future__ import annotations
 
+from dataclasses import asdict, replace
+
 import numpy as np
 import pandas as pd
 import torch
@@ -12,19 +14,24 @@ from zhisa.regime import (
     LearnedRegimeModel,
     LearnedRegimeModelConfig,
     RegimeDecisionAdapter,
+    RegimeDecisionAdapterConfig,
     RegimeFeatureEngine,
     RegimeFeatureEngineConfig,
     RegimeIntelligence,
     RegimeIntelligenceConfig,
     RegimeModelCandidate,
+    RegimeModelPrediction,
     RegimeModelTrainConfig,
     RegimeModelTrainer,
     RegimeModelWalkForwardConfig,
     RegimeOutcomeDataset,
     RegimeOutcomeDatasetConfig,
+    RegimeProbabilityCalibration,
     RuleRegimePrior,
     build_regime_model_registry,
     calibrate_learned_regime_model,
+    evaluate_regime_probability_calibration,
+    load_learned_regime_model,
     predict_learned_regime,
     regime_outcome_collate,
     run_regime_model_walk_forward,
@@ -105,6 +112,42 @@ def test_regime_outcome_dataset_uses_causal_features_and_future_labels() -> None
     assert torch.isfinite(item.transition_event)
 
 
+def test_regime_outcome_dataset_cache_is_bounded_lru() -> None:
+    ds = RegimeOutcomeDataset(
+        _mixed_df(150),
+        RegimeOutcomeDatasetConfig(
+            horizons=(2,),
+            stride=4,
+            min_history=32,
+            cache_capacity=2,
+            analyzer=RegimeIntelligenceConfig(timeframes=("5m",)),
+        ),
+    )
+
+    _ = ds[0]
+    _ = ds[1]
+    _ = ds[0]
+    _ = ds[2]
+
+    assert len(ds._cache) == 2
+    assert 1 not in ds._cache
+    assert list(ds._cache.keys()) == [0, 2]
+
+
+def test_learned_regime_model_checkpoint_round_trips_nested_config(tmp_path) -> None:
+    model = LearnedRegimeModel(
+        LearnedRegimeModelConfig(hidden_dim=32, latent_dim=8, n_horizons=2, dropout=0.0)
+    )
+    ckpt = tmp_path / "learned_regime.pt"
+    torch.save({"model": model.state_dict(), "model_config": asdict(model.cfg)}, ckpt)
+
+    loaded = load_learned_regime_model(ckpt)
+    out = loaded(torch.zeros(1, loaded.input_dim))
+
+    assert hasattr(loaded.cfg.vectorizer, "scalar_fields")
+    assert out["latent_regime_embedding"].shape == (1, 8)
+
+
 def test_learned_regime_model_outputs_expected_heads_and_loss_backpropagates() -> None:
     ds = RegimeOutcomeDataset(_mixed_df(), _dataset_cfg())
     batch = regime_outcome_collate([ds[0], ds[1], ds[2], ds[3]])
@@ -140,10 +183,12 @@ def test_regime_model_trainer_reduces_tiny_training_loss_and_calibrates() -> Non
 
     result = trainer.fit(ds, val_ds=ds)
     calibration, metrics = calibrate_learned_regime_model(model, ds)
+    holdout_metrics = evaluate_regime_probability_calibration(model, ds, calibration)
 
     assert result["history"][-1]["total"] <= result["history"][0]["total"]
     assert metrics["transition_brier_after"] <= metrics["transition_brier_before"] + 1e-9
     assert metrics["tradeability_brier_after"] <= metrics["tradeability_brier_before"] + 1e-9
+    assert holdout_metrics["transition_brier_after"] <= holdout_metrics["transition_brier_before"] + 1e-9
     assert calibration.version == "intercept_v1"
 
 
@@ -165,6 +210,52 @@ def test_decision_adapter_and_regime_intelligence_hybrid_mode() -> None:
     assert hybrid.features["inference_source"] == "hybrid"
     assert 0.0 <= hybrid.tradeability_score <= 1.0
     assert 0.0 <= hybrid.transition_risk <= 1.0
+
+
+def test_decision_adapter_guardrails_explicitly_cap_size_when_model_is_uncertain() -> None:
+    rule = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(_mixed_df())
+    rule = replace(rule, position_size_multiplier=0.8, tradeability_score=0.8, uncertainty=0.1)
+    prediction = RegimeModelPrediction(
+        outputs={"macro_probabilities": {}},
+        macro=rule.primary_regime,
+        meso=rule.secondary_regime,
+        risk_mode=rule.risk_mode,
+        transition_risk=0.2,
+        tradeability=0.9,
+        risk_budget=0.9,
+        uncertainty=0.9,
+        ood_score=0.1,
+        playbook_utility={},
+    )
+    adapted = RegimeDecisionAdapter(
+        RegimeDecisionAdapterConfig(mode="hybrid", min_tradeability_on_guardrail=0.25)
+    ).adapt(rule, prediction)
+
+    assert adapted.position_size_multiplier == 0.25
+    assert adapted.tradeability_score == 0.25
+    assert "model_uncertainty" in adapted.features["guardrail_overrides"]
+
+
+def test_decision_adapter_guardrails_keep_stricter_rule_size() -> None:
+    rule = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(_mixed_df())
+    rule = replace(rule, position_size_multiplier=0.1, tradeability_score=0.8, uncertainty=0.1)
+    prediction = RegimeModelPrediction(
+        outputs={"macro_probabilities": {}},
+        macro=rule.primary_regime,
+        meso=rule.secondary_regime,
+        risk_mode=rule.risk_mode,
+        transition_risk=0.2,
+        tradeability=0.9,
+        risk_budget=0.9,
+        uncertainty=0.9,
+        ood_score=0.1,
+        playbook_utility={},
+    )
+    adapted = RegimeDecisionAdapter(
+        RegimeDecisionAdapterConfig(mode="hybrid", min_tradeability_on_guardrail=0.25)
+    ).adapt(rule, prediction)
+
+    assert adapted.position_size_multiplier == 0.1
 
 
 def test_rule_only_fallback_adds_inference_metadata() -> None:
@@ -213,3 +304,6 @@ def test_regime_model_walk_forward_trains_locked_folds() -> None:
     assert result.summary["n_folds"] == 1
     assert result.best_candidate
     assert result.registry.champion_name == result.best_candidate
+    assert result.summary["selection_metric"] == "test_transition_brier_after"
+    assert "test_transition_brier_after" in result.fold_metrics[0]
+    assert "test_transition_brier_after" in result.candidates[0].metrics

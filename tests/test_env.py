@@ -272,6 +272,35 @@ def test_skip_holds_open_position(small_market):
     assert info["fee"] == 0.0
 
 
+def test_step_info_includes_risk_and_fill_diagnostics(small_market):
+    env = TradingEnv(small_market, cfg=EnvConfig(window=16, image_size=16))
+    env.reset(seed=0)
+    _, _, _, _, info = env.step(int(DiscreteAction.LONG_50))
+
+    assert info["requested_position"] == 0.5
+    assert info["target_position"] == 0.5
+    assert info["order_side"] == 1
+    assert info["requested_size"] >= info["filled_size"] >= 0.0
+    assert info["risk_allowed"] is True
+    assert "risk_reason" in info
+    assert info["risk_suggested_size"] >= 0.0
+
+
+def test_noop_action_bypasses_risk_guard(small_market):
+    env = TradingEnv(small_market, cfg=EnvConfig(window=16, image_size=16))
+    env.reset(seed=0)
+    env.step(int(DiscreteAction.LONG_50))
+    _, _, _, _, info = env.step(int(DiscreteAction.LONG_50))
+
+    assert info["requested_position"] == 0.5
+    assert info["target_position"] == 0.5
+    assert info["order_side"] == 0
+    assert info["requested_size"] == 0.0
+    assert info["filled_size"] == 0.0
+    assert info["risk_allowed"] is True
+    assert info["risk_reason"] == "no_order"
+
+
 # ---------------------------------------------------------------------------
 # Gymnasium registration
 # ---------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 """Tests for the model encoders, fusion, memory, heads, and policy."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 
@@ -21,7 +23,7 @@ from zhisa.models.regime_policy import (
     build_regime_policy_targets,
 )
 from zhisa.regime.encoder import RegimeEncoderConfig
-from zhisa.regime import RegimeIntelligence, RegimeIntelligenceConfig, plan_trade
+from zhisa.regime import PLAYBOOK_TO_ID, RegimeIntelligence, RegimeIntelligenceConfig, plan_trade
 from zhisa.training.losses import MultiTaskLoss
 
 
@@ -195,6 +197,8 @@ def test_regime_policy_targets_and_aux_loss_penalize_blocked_actions():
     losses["total"].backward()
 
     assert targets["regime_action_mask"].shape == (2, 9)
+    assert targets["regime_playbook_fallback"].shape == (2,)
+    assert targets["regime_playbook_fallback"].sum().item() == 0.0
     assert targets["regime_playbook_prior"].shape == (2,)
     assert targets["execution_order_type_label"].shape == (2,)
     assert targets["execution_urgency_label"].shape == (2,)
@@ -209,6 +213,24 @@ def test_regime_policy_targets_and_aux_loss_penalize_blocked_actions():
     assert torch.isfinite(losses["total"])
     head_grads = [p.grad for p in model.regime_heads.parameters() if p.requires_grad]
     assert any(g is not None and g.abs().sum() > 0 for g in head_grads)
+
+
+def test_regime_policy_targets_mark_unknown_playbook_fallback():
+    analyzer = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m",)))
+    close = torch.linspace(100.0, 120.0, 120).numpy()
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {"open": close, "high": close + 0.5, "low": close - 0.5, "close": close, "volume": 100.0},
+        index=pd.date_range("2026-01-01", periods=len(close), freq="5min", tz="UTC"),
+    )
+    report = replace(analyzer.analyze(df), allowed_playbooks=["custom_playbook"])
+    plan = replace(plan_trade(report), recommended_playbook="custom_playbook")
+
+    targets = build_regime_policy_targets([report], plans=[plan], n_actions=9)
+
+    assert targets["regime_playbook_fallback"].item() == 1.0
+    assert targets["regime_playbook_label"].item() == PLAYBOOK_TO_ID["no_trade_wait"]
 
 
 def test_multitask_loss_consumes_regime_policy_targets():

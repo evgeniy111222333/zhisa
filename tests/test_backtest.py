@@ -9,7 +9,7 @@ import torch
 
 from zhisa.backtest.engine import run_backtest, _extract_trade_returns, buy_and_hold_benchmark
 from zhisa.backtest.metrics import compute_metrics
-from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
+from zhisa.backtest.regime_ab import RegimeABConfig, RegimeGatedPolicy, run_regime_ab_backtest
 from zhisa.backtest.regime_walkforward import (
     RegimeProfileSelectionConfig,
     RegimeWalkForwardConfig,
@@ -116,6 +116,48 @@ def test_regime_ab_backtest_masks_crash_longs():
     assert "no_market_rate" in ab.gated.regime_summary
     assert ab.baseline.result.metrics.n_periods > 0
     assert ab.gated.result.metrics.n_periods > 0
+
+
+def test_regime_gated_policy_forces_planned_reduce_action():
+    mask = np.ones(9, dtype=bool)
+    plan = SimpleNamespace(
+        status="conditional",
+        position_management=SimpleNamespace(
+            de_risk_required=True,
+            intent="reduce",
+            reduce_to=0.25,
+        ),
+    )
+
+    action = RegimeGatedPolicy._planned_management_action(
+        plan,
+        mask,
+        current_action=int(DiscreteAction.LONG_50),
+        current_position=0.5,
+    )
+
+    assert action == int(DiscreteAction.LONG_25)
+
+
+def test_regime_gated_policy_forces_skip_when_flat_no_trade():
+    mask = np.ones(9, dtype=bool)
+    plan = SimpleNamespace(
+        status="no_trade",
+        position_management=SimpleNamespace(
+            de_risk_required=False,
+            intent="hold_or_wait",
+            reduce_to=0.0,
+        ),
+    )
+
+    action = RegimeGatedPolicy._planned_management_action(
+        plan,
+        mask,
+        current_action=int(DiscreteAction.LONG_25),
+        current_position=0.0,
+    )
+
+    assert action == int(DiscreteAction.SKIP)
 
 
 def test_regime_ab_backtest_accepts_named_analyzer_profile(tiny_market):

@@ -23,9 +23,9 @@ import torch
 from zhisa.config import load_config
 from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.data.expert import SUPPORTED_EXPERTS, build_expert
-from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.env.trading_env import EnvConfig
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig
 from zhisa.training.s2b_imitation import (
@@ -93,16 +93,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s2b/model.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path) if cfg_path.exists() else None
 
-    set_seed(int(cfg.get("seed", 0)) if cfg else 0)
+    seed = int(cfg.get("seed", 0)) if cfg else 0
+    set_seed(seed)
 
     # --- Data ---
-    n_bars = args.bars or int(cfg.get("bars", 4000)) if cfg else 4000
-    df = generate_market(MarketConfig(n_bars=n_bars))
+    n_bars = int(args.bars or (cfg.get("bars", 4000) if cfg else 4000))
+    df = load_market_dataframe(args, seed=seed, default_bars=n_bars)
 
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
@@ -146,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             epochs=epochs, batch_size=int(cfg.get("batch_size", 32)) if cfg else 32,
             grad_clip=float(cfg.get("grad_clip", 1.0)) if cfg else 1.0,
             log_every=int(cfg.get("log_every", 50)) if cfg else 50,
-            device=device, seed=int(cfg.get("seed", 0)) if cfg else 0,
+            device=device, seed=seed,
             optim=optim_cfg, loss_weights=loss_weights,
             checkpoint=args.checkpoint,
         )
@@ -169,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=int(cfg.get("batch_size", 32)) if cfg else 32,
             grad_clip=float(cfg.get("grad_clip", 1.0)) if cfg else 1.0,
             log_every=int(cfg.get("log_every", 50)) if cfg else 50,
-            device=device, seed=int(cfg.get("seed", 0)) if cfg else 0,
+            device=device, seed=seed,
             optim=optim_cfg, loss_weights=loss_weights,
             env_cfg=env_cfg, checkpoint=args.checkpoint,
         )

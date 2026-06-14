@@ -20,10 +20,10 @@ from pathlib import Path
 import torch
 
 from zhisa.config import load_config
-from zhisa.data.dataset import MarketDataset, SampleSpec
-from zhisa.data.synthetic import MarketConfig, generate_market
-from zhisa.env.trading_env import EnvConfig
+from zhisa.data.dataset import SampleSpec
+from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.cvar_ppo import CVaRPPOConfig, CVaRPPOTrainer
 from zhisa.utils.seeding import set_seed
 
@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cvar-lambda-lr", type=float, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s4_cvar/model.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -68,8 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     set_seed(seed)
     device = args.device or (str(cfg.get("device", _default_device())) if cfg else _default_device())
 
-    n_bars = args.bars or (int(cfg.get("bars", 4000)) if cfg else 4000)
-    df = generate_market(MarketConfig(n_bars=n_bars))
+    n_bars = int(args.bars or (cfg.get("bars", 4000) if cfg else 4000))
+    df = load_market_dataframe(args, seed=seed, default_bars=n_bars)
 
     chart_window = int(cfg.get("chart_window", 16)) if cfg else 16
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
@@ -78,18 +79,20 @@ def main(argv: list[str] | None = None) -> int:
         image_size=image_size,
         n_regime_states=int(cfg.get("n_regime_states", 4)) if cfg else 4,
     )
-    probe_ds = MarketDataset(df, spec=spec)
-    n_feat = probe_ds._features.shape[1]
-    n_ctx = probe_ds._time_features.shape[1]
+
+    env_cfg = _build_env_cfg(cfg)
+    env_cfg.window = chart_window
+    env_cfg.image_size = image_size
+
+    probe_len = min(len(df), max(chart_window + 80, 128))
+    probe_env = TradingEnv(df.iloc[:probe_len], cfg=env_cfg)
+    n_feat = probe_env.obs_numeric_dim
+    n_ctx = probe_env.obs_context_dim
     model = build_default_policy(
         in_numeric_features=n_feat, in_context_features=n_ctx,
         window=chart_window, image_size=image_size,
         n_actions=9, n_regime_classes=spec.n_regime_states,
     )
-
-    env_cfg = _build_env_cfg(cfg)
-    env_cfg.window = chart_window
-    env_cfg.image_size = image_size
 
     trainer_cfg = CVaRPPOConfig(
         n_iterations=args.iterations or (int(cfg.get("n_iterations", 5)) if cfg else 5),

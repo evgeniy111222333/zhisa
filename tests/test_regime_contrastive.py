@@ -110,6 +110,26 @@ def test_augment_regime_features_preserves_shape_and_category_defaults() -> None
     torch.testing.assert_close(out[:, 3:], x[:, 3:])
 
 
+def test_augment_regime_features_does_not_dropout_core_structured_fields() -> None:
+    x = torch.ones(16, 4)
+    feature_names = (
+        "scalar.confidence",
+        "aggregate.ret_long",
+        "context.orderflow.delta_z",
+        "macro.bull_trend",
+    )
+    out = augment_regime_features(
+        x,
+        RegimeAugmentationConfig(feature_dropout=0.95, continuous_noise=0.0, categorical_dropout=0.0),
+        feature_names=feature_names,
+        generator=torch.Generator().manual_seed(11),
+    )
+
+    torch.testing.assert_close(out[:, :2], x[:, :2])
+    torch.testing.assert_close(out[:, 3:], x[:, 3:])
+    assert torch.isfinite(out).all()
+
+
 def test_nt_xent_prefers_aligned_views() -> None:
     z = torch.eye(5)
     aligned = nt_xent_loss(z, z + 0.01 * torch.randn_like(z), temperature=0.08)

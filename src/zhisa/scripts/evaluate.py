@@ -10,9 +10,10 @@ import torch
 
 from zhisa.backtest.engine import run_backtest
 from zhisa.backtest.reports import print_metrics
-from zhisa.data.synthetic import MarketConfig, generate_market
+from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.utils.seeding import set_seed
 
 
@@ -45,10 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--bars", type=int, default=4000)
     parser.add_argument("--out", type=str, default="artifacts/eval/report.json")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     set_seed(0)
-    df = generate_market(MarketConfig(n_bars=args.bars))
+    df = load_market_dataframe(args, seed=0, default_bars=args.bars)
     policy = None
     env_cfg = EnvConfig()
     if args.checkpoint and Path(args.checkpoint).exists():

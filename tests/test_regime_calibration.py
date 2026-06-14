@@ -43,6 +43,35 @@ def test_online_calibrator_does_not_change_report_before_min_samples() -> None:
     assert calibrated == report
 
 
+def test_online_calibrator_keeps_sparse_playbook_keys_independent() -> None:
+    report = _bull_report()
+    calibrator = OnlineRegimeCalibrator(RegimeCalibrationConfig(min_samples=3, window=16))
+    for _ in range(2):
+        calibrator.update(
+            report,
+            RegimeOutcome(forward_return=-0.03, realized_vol=0.02, max_drawdown=-0.05),
+            playbook="trend_pullback_long",
+        )
+        calibrator.update(
+            report,
+            RegimeOutcome(forward_return=-0.03, realized_vol=0.02, max_drawdown=-0.05),
+            playbook="breakout_retest_long",
+        )
+
+    assert calibrator.calibrate(report, playbook="trend_pullback_long") == report
+    calibrator.update(
+        report,
+        RegimeOutcome(forward_return=-0.03, realized_vol=0.02, max_drawdown=-0.05),
+        playbook="trend_pullback_long",
+    )
+
+    calibrated = calibrator.calibrate(report, playbook="trend_pullback_long")
+    still_sparse = calibrator.calibrate(report, playbook="breakout_retest_long")
+
+    assert calibrated != report
+    assert still_sparse == report
+
+
 def test_online_calibrator_reduces_confidence_tradeability_and_size_after_bad_outcomes() -> None:
     report = _bull_report()
     calibrator = OnlineRegimeCalibrator(RegimeCalibrationConfig(min_samples=4, window=16))

@@ -8,8 +8,8 @@ import torch
 
 from zhisa.config import load_config
 from zhisa.data.dataset import MarketDataset, SampleSpec
-from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig
 from zhisa.training.s2_supervised import SupervisedTrainer, TrainConfig
@@ -36,16 +36,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s2/model.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path) if cfg_path.exists() else None
 
-    set_seed(int(cfg.get("seed", 0)) if cfg else 0)
+    seed = int(cfg.get("seed", 0)) if cfg else 0
+    set_seed(seed)
 
     # Data
-    synth_cfg = MarketConfig(n_bars=args.bars)
-    df = generate_market(synth_cfg)
+    df = load_market_dataframe(args, seed=seed, default_bars=args.bars)
     spec = SampleSpec(
         chart_window=int(cfg.get("chart_window", 32)) if cfg else 32,
         feature_window=int(cfg.get("chart_window", 32)) if cfg else 32,

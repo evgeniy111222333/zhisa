@@ -352,22 +352,33 @@ class TradingEnv(gym.Env):
         # 3. Risk guard. If the action is *reducing* the absolute
         #    position (closing or partial-closing), always allow it
         #    in full — the trader must always be able to de-risk.
+        requested_target = float(target)
+        risk_allowed = True
+        risk_reason = "de_risk_bypass"
+        risk_suggested_size = 1.0
         delta = target - self._position
         book_top = 1.0
-        if abs(target) < abs(self._position) - 1e-9:
+        if abs(delta) <= 1e-9:
+            risk_reason = "no_order"
+        elif abs(target) < abs(self._position) - 1e-9:
             # Reduction: no cap on size, no risk-guard check.
             pass
         else:
+            risk_reason = ""
             decision = self._risk.check_order(
                 requested_size_equity=abs(delta) * cfg.max_leverage,
                 instrument="primary",
                 positions={"primary": self._position * cfg.max_leverage},
                 current_price=price_now,
             )
+            risk_allowed = bool(decision.allowed)
+            risk_reason = decision.reason
+            risk_suggested_size = float(decision.suggested_size)
             if not decision.allowed:
                 target = self._position
             else:
                 target = self._position + delta * decision.suggested_size
+        final_target = float(target)
 
         # 4. Execution
         size_units = abs(target - self._position) * cfg.max_leverage / max(price_now, 1e-12)
@@ -500,6 +511,14 @@ class TradingEnv(gym.Env):
             "exit_reason": self._last_exit_reason,
             "funding_paid": funding_paid_this_step,
             "cumulative_funding": self._funding_paid,
+            "requested_position": requested_target,
+            "target_position": final_target,
+            "order_side": side,
+            "requested_size": fill.requested,
+            "filled_size": fill.filled,
+            "risk_allowed": risk_allowed,
+            "risk_reason": risk_reason,
+            "risk_suggested_size": risk_suggested_size,
         }
         return self._obs(), float(reward), bool(terminated), bool(truncated), info
 

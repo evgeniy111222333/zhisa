@@ -12,8 +12,8 @@ import torch
 
 from zhisa.config import load_config
 from zhisa.data.dataset import MarketDataset, SampleSpec
-from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.s1_ssl import SSLPretrainer, SSLConfig
 from zhisa.utils.seeding import set_seed
 
@@ -59,15 +59,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s1/model.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path) if cfg_path.exists() else None
 
-    set_seed(int(cfg.get("seed", 0)) if cfg else 0)
+    seed = int(cfg.get("seed", 0)) if cfg else 0
+    set_seed(seed)
 
     # Data
-    df = generate_market(MarketConfig(n_bars=args.bars))
+    df = load_market_dataframe(args, seed=seed, default_bars=args.bars)
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
     spec = SampleSpec(

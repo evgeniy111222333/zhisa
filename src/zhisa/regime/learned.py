@@ -1,6 +1,7 @@
 """Outcome-trained regime model, dataset, calibration, and hybrid adapter."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -47,6 +48,7 @@ class RegimeOutcomeDatasetConfig:
     min_history: int = 128
     symbol: str = ""
     cache_items: bool = True
+    cache_capacity: int | None = 4096
     transition_return_threshold: float = 0.015
     transition_vol_multiplier: float = 1.35
     crash_drawdown_threshold: float = -0.04
@@ -64,6 +66,8 @@ class RegimeOutcomeDatasetConfig:
             raise ValueError("stride must be positive")
         if self.min_history < 2:
             raise ValueError("min_history must be >= 2")
+        if self.cache_capacity is not None and self.cache_capacity < 0:
+            raise ValueError("cache_capacity must be non-negative or None")
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,7 @@ class RegimeOutcomeDataset(Dataset):
         self.vectorizer = vectorizer or RegimeFeatureVectorizer(self.cfg.vectorizer)
         if "close" not in df.columns:
             raise ValueError("df must contain a close column")
+        self._close = df["close"].astype(float)
         max_h = max(self.cfg.horizons)
         if len(df) <= self.cfg.min_history + max_h:
             raise ValueError(
@@ -158,18 +163,20 @@ class RegimeOutcomeDataset(Dataset):
         start = self.cfg.min_history - 1
         stop = len(df) - max_h - 1
         self.indices = list(range(start, stop + 1, self.cfg.stride))
-        self._cache: dict[int, RegimeOutcomeItem] = {}
+        self._cache: OrderedDict[int, RegimeOutcomeItem] = OrderedDict()
 
     def __len__(self) -> int:
         return len(self.indices)
 
     def __getitem__(self, idx: int) -> RegimeOutcomeItem:
         if self.cfg.cache_items and idx in self._cache:
-            return self._cache[idx]
+            item = self._cache.pop(idx)
+            self._cache[idx] = item
+            return item
         t = self.indices[idx]
         report = self.analyzer.analyze(self.df, t=t, symbol=self.cfg.symbol)
         x = torch.from_numpy(self.vectorizer.transform(report)).float()
-        close = self.df["close"].astype(float)
+        close = self._close
         outcomes: list[RegimeOutcome] = []
         returns: list[float] = []
         vols: list[float] = []
@@ -224,8 +231,11 @@ class RegimeOutcomeDataset(Dataset):
                 "best_playbook": best_playbook,
             },
         )
-        if self.cfg.cache_items:
+        if self.cfg.cache_items and self.cfg.cache_capacity != 0:
             self._cache[idx] = item
+            if self.cfg.cache_capacity is not None:
+                while len(self._cache) > self.cfg.cache_capacity:
+                    self._cache.popitem(last=False)
         return item
 
 
@@ -542,7 +552,7 @@ class RegimeModelWalkForwardConfig:
     train: RegimeModelTrainConfig = field(default_factory=RegimeModelTrainConfig)
     validation_fraction: float = 0.25
     artifact_dir: str = ""
-    selection_metric: str = "test_total"
+    selection_metric: str = "test_transition_brier_after"
     higher_is_better: bool = False
 
 
@@ -595,8 +605,8 @@ def run_regime_model_walk_forward(
         test_df = _slice_for_dataset(df, test_start, test_end, min_history=cfg.dataset.min_history)
         try:
             train_ds = RegimeOutcomeDataset(fit_df, cfg.dataset)
-            val_ds = RegimeOutcomeDataset(val_df, replace(cfg.dataset, cache_items=False))
-            test_ds = RegimeOutcomeDataset(test_df, replace(cfg.dataset, cache_items=False))
+            val_ds = RegimeOutcomeDataset(val_df, cfg.dataset)
+            test_ds = RegimeOutcomeDataset(test_df, cfg.dataset)
         except ValueError:
             continue
         model_cfg = replace(cfg.model, n_horizons=len(cfg.dataset.horizons))
@@ -608,6 +618,12 @@ def run_regime_model_walk_forward(
         val_metrics = trainer.evaluate(val_ds)
         calibration, calibration_metrics = calibrate_learned_regime_model(model, val_ds, device=train_cfg.device)
         test_metrics = trainer.evaluate(test_ds)
+        test_calibration_metrics = evaluate_regime_probability_calibration(
+            model,
+            test_ds,
+            calibration,
+            device=train_cfg.device,
+        )
         row = {
             "fold": i,
             "train": fold.train,
@@ -618,6 +634,8 @@ def run_regime_model_walk_forward(
             "test_total": float(test_metrics.get("total", 0.0)),
             "test_transition_acc": float(test_metrics.get("transition_acc", 0.0)),
             **{f"calibration_{k}": float(v) for k, v in calibration_metrics.items() if isinstance(v, (int, float))},
+            **{f"val_{k}": float(v) for k, v in calibration_metrics.items() if isinstance(v, (int, float))},
+            **{f"test_{k}": float(v) for k, v in test_calibration_metrics.items() if isinstance(v, (int, float))},
         }
         fold_metrics.append(row)
         candidates.append(
@@ -630,7 +648,10 @@ def run_regime_model_walk_forward(
                     "test_total": row["test_total"],
                     "val_total": row["val_total"],
                     "test_transition_acc": row["test_transition_acc"],
-                    "transition_brier_after": row.get("calibration_transition_brier_after", 0.0),
+                    "val_transition_brier_after": row.get("val_transition_brier_after", 0.0),
+                    "test_transition_brier_after": row.get("test_transition_brier_after", 0.0),
+                    "test_tradeability_brier_after": row.get("test_tradeability_brier_after", 0.0),
+                    "test_risk_budget_brier_after": row.get("test_risk_budget_brier_after", 0.0),
                 },
                 metadata={
                     "fold": i,
@@ -715,12 +736,12 @@ def _ece(scores: np.ndarray, labels: np.ndarray, bins: int = 10) -> float:
 
 
 @torch.no_grad()
-def calibrate_learned_regime_model(
+def _calibration_arrays(
     model: LearnedRegimeModel,
     ds: RegimeOutcomeDataset,
     *,
-    device: str | torch.device = "cpu",
-) -> tuple[RegimeProbabilityCalibration, dict[str, Any]]:
+    device: str | torch.device,
+) -> dict[str, np.ndarray]:
     loader = DataLoader(ds, batch_size=128, shuffle=False, collate_fn=regime_outcome_collate)
     model.to(device)
     model.eval()
@@ -734,28 +755,85 @@ def calibrate_learned_regime_model(
         batch_d = _move_batch(batch, torch.device(device))
         out = model(batch_d.x)
         transitions.extend(out["transition_hazard"].detach().cpu().numpy().tolist())
-        transition_labels.extend(batch.transition_event.numpy().tolist())
+        transition_labels.extend(batch_d.transition_event.detach().cpu().numpy().tolist())
         tradeability.extend(out["tradeability"].detach().cpu().numpy().tolist())
-        trade_labels.extend((1.0 - batch.execution_risk).clamp(0.0, 1.0).numpy().tolist())
+        trade_labels.extend((1.0 - batch_d.execution_risk).clamp(0.0, 1.0).detach().cpu().numpy().tolist())
         risk_budget.extend(out["risk_budget"].detach().cpu().numpy().tolist())
-        risk_labels.extend((1.0 - batch.transition_event).clamp(0.0, 1.0).numpy().tolist())
-    t = np.asarray(transitions, dtype=np.float64)
-    tl = np.asarray(transition_labels, dtype=np.float64)
-    tr = np.asarray(tradeability, dtype=np.float64)
-    trl = np.asarray(trade_labels, dtype=np.float64)
-    rb = np.asarray(risk_budget, dtype=np.float64)
-    rbl = np.asarray(risk_labels, dtype=np.float64)
-    # Conservative intercept-only calibration keeps ranking intact and fixes base-rate bias.
-    def bias(pred: np.ndarray, label: np.ndarray) -> float:
-        if pred.size == 0:
-            return 0.0
-        p = _clip01(float(pred.mean()))
-        y = _clip01(float(label.mean()))
-        return float(np.log(max(y, 1e-6) / max(1.0 - y, 1e-6)) - np.log(max(p, 1e-6) / max(1.0 - p, 1e-6)))
+        risk_labels.extend((1.0 - batch_d.transition_event).clamp(0.0, 1.0).detach().cpu().numpy().tolist())
+    return {
+        "transition": np.asarray(transitions, dtype=np.float64),
+        "transition_label": np.asarray(transition_labels, dtype=np.float64),
+        "tradeability": np.asarray(tradeability, dtype=np.float64),
+        "tradeability_label": np.asarray(trade_labels, dtype=np.float64),
+        "risk_budget": np.asarray(risk_budget, dtype=np.float64),
+        "risk_budget_label": np.asarray(risk_labels, dtype=np.float64),
+    }
 
-    t_bias = bias(t, tl)
-    tr_bias = bias(tr, trl)
-    rb_bias = bias(rb, rbl)
+
+def _calibration_bias(pred: np.ndarray, label: np.ndarray) -> float:
+    if pred.size == 0:
+        return 0.0
+    p = _clip01(float(pred.mean()))
+    y = _clip01(float(label.mean()))
+    return float(np.log(max(y, 1e-6) / max(1.0 - y, 1e-6)) - np.log(max(p, 1e-6) / max(1.0 - p, 1e-6)))
+
+
+def _calibration_metrics(
+    arrays: dict[str, np.ndarray],
+    calibration: RegimeProbabilityCalibration,
+) -> dict[str, Any]:
+    t = arrays["transition"]
+    tl = arrays["transition_label"]
+    tr = arrays["tradeability"]
+    trl = arrays["tradeability_label"]
+    rb = arrays["risk_budget"]
+    rbl = arrays["risk_budget_label"]
+    t_cal = np.asarray([calibration.transition(x) for x in t], dtype=np.float64)
+    tr_cal = np.asarray([calibration.tradeability(x) for x in tr], dtype=np.float64)
+    rb_cal = np.asarray([calibration.risk_budget(x) for x in rb], dtype=np.float64)
+    return {
+        "transition_brier_before": _brier(t, tl),
+        "transition_brier_after": _brier(t_cal, tl),
+        "transition_ece_before": _ece(t, tl),
+        "transition_ece_after": _ece(t_cal, tl),
+        "tradeability_brier_before": _brier(tr, trl),
+        "tradeability_brier_after": _brier(tr_cal, trl),
+        "risk_budget_brier_before": _brier(rb, rbl),
+        "risk_budget_brier_after": _brier(rb_cal, rbl),
+        "n": int(t.size),
+    }
+
+
+def evaluate_regime_probability_calibration(
+    model: LearnedRegimeModel,
+    ds: RegimeOutcomeDataset,
+    calibration: RegimeProbabilityCalibration | None = None,
+    *,
+    device: str | torch.device = "cpu",
+) -> dict[str, Any]:
+    """Evaluate probability calibration on a dataset without fitting it there."""
+    arrays = _calibration_arrays(model, ds, device=device)
+    return _calibration_metrics(arrays, calibration or RegimeProbabilityCalibration())
+
+
+@torch.no_grad()
+def calibrate_learned_regime_model(
+    model: LearnedRegimeModel,
+    ds: RegimeOutcomeDataset,
+    *,
+    device: str | torch.device = "cpu",
+) -> tuple[RegimeProbabilityCalibration, dict[str, Any]]:
+    arrays = _calibration_arrays(model, ds, device=device)
+    t = arrays["transition"]
+    tl = arrays["transition_label"]
+    tr = arrays["tradeability"]
+    trl = arrays["tradeability_label"]
+    rb = arrays["risk_budget"]
+    rbl = arrays["risk_budget_label"]
+    # Conservative intercept-only calibration keeps ranking intact and fixes base-rate bias.
+    t_bias = _calibration_bias(t, tl)
+    tr_bias = _calibration_bias(tr, trl)
+    rb_bias = _calibration_bias(rb, rbl)
     candidate = RegimeProbabilityCalibration(
         transition_bias=t_bias,
         tradeability_bias=tr_bias,
@@ -774,20 +852,7 @@ def calibrate_learned_regime_model(
         risk_budget_bias=rb_bias,
         version="intercept_v1",
     )
-    t_cal = np.asarray([cal.transition(x) for x in t], dtype=np.float64)
-    tr_cal = np.asarray([cal.tradeability(x) for x in tr], dtype=np.float64)
-    rb_cal = np.asarray([cal.risk_budget(x) for x in rb], dtype=np.float64)
-    metrics = {
-        "transition_brier_before": _brier(t, tl),
-        "transition_brier_after": _brier(t_cal, tl),
-        "transition_ece_before": _ece(t, tl),
-        "transition_ece_after": _ece(t_cal, tl),
-        "tradeability_brier_before": _brier(tr, trl),
-        "tradeability_brier_after": _brier(tr_cal, trl),
-        "risk_budget_brier_before": _brier(rb, rbl),
-        "risk_budget_brier_after": _brier(rb_cal, rbl),
-        "n": int(t.size),
-    }
+    metrics = _calibration_metrics(arrays, cal)
     return cal, metrics
 
 
@@ -949,10 +1014,37 @@ class RegimeDecisionAdapter:
         )
 
 
+def _coerce_vectorizer_config(value: object) -> RegimeVectorizerConfig:
+    if isinstance(value, RegimeVectorizerConfig):
+        return value
+    if not isinstance(value, dict):
+        return RegimeVectorizerConfig()
+    fields = RegimeVectorizerConfig.__dataclass_fields__
+    data = {k: v for k, v in value.items() if k in fields}
+    for key, field_info in fields.items():
+        if key in data and isinstance(data[key], list):
+            data[key] = tuple(data[key])
+        elif key not in data and getattr(field_info, "default", None) is not None:
+            continue
+    return RegimeVectorizerConfig(**data)
+
+
+def _coerce_model_config(value: object) -> LearnedRegimeModelConfig:
+    if isinstance(value, LearnedRegimeModelConfig):
+        return value
+    if not isinstance(value, dict):
+        return LearnedRegimeModelConfig()
+    fields = LearnedRegimeModelConfig.__dataclass_fields__
+    data = {k: v for k, v in value.items() if k in fields}
+    if "return_quantiles" in data and isinstance(data["return_quantiles"], list):
+        data["return_quantiles"] = tuple(data["return_quantiles"])
+    data["vectorizer"] = _coerce_vectorizer_config(data.get("vectorizer"))
+    return LearnedRegimeModelConfig(**data)
+
+
 def load_learned_regime_model(path: str | Path, *, map_location: str | torch.device = "cpu") -> LearnedRegimeModel:
     payload = torch.load(path, map_location=map_location, weights_only=False)
-    cfg_raw = payload.get("model_config", {})
-    cfg = LearnedRegimeModelConfig(**{k: v for k, v in cfg_raw.items() if k in LearnedRegimeModelConfig.__dataclass_fields__})
+    cfg = _coerce_model_config(payload.get("model_config", {}))
     model = LearnedRegimeModel(cfg)
     model.load_state_dict(payload["model"])
     model.eval()
@@ -977,6 +1069,7 @@ __all__ = [
     "RegimeOutcomeItem",
     "RegimeProbabilityCalibration",
     "calibrate_learned_regime_model",
+    "evaluate_regime_probability_calibration",
     "load_learned_regime_model",
     "predict_learned_regime",
     "regime_outcome_collate",

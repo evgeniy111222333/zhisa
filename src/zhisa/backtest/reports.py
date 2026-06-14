@@ -10,6 +10,16 @@ import pandas as pd
 
 from zhisa.backtest.engine import BacktestResult
 from zhisa.backtest.metrics import Metrics
+from zhisa.env.actions import DiscreteAction
+
+
+def _action_name(action: int) -> str:
+    if int(action) < 0:
+        return "INIT"
+    try:
+        return DiscreteAction(int(action)).name
+    except ValueError:
+        return str(int(action))
 
 
 def _format_metrics(m: Metrics) -> str:
@@ -58,6 +68,8 @@ def save_report(
         "equity": result.equity,
         "position": result.positions,
         "price": result.prices,
+        "action": result.actions,
+        "action_name": [_action_name(a) for a in result.actions],
         "reward": result.rewards,
     })
     if result.timestamps is not None:

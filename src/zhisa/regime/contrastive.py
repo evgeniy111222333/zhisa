@@ -19,6 +19,7 @@ class RegimeAugmentationConfig:
     probability_noise: float = 0.01
     categorical_dropout: float = 0.0
     keep_scalar_prefixes: tuple[str, ...] = ("scalar.", "aggregate.", "context.", "probability.")
+    dropout_protected_prefixes: tuple[str, ...] = ("scalar.", "aggregate.")
 
     def __post_init__(self) -> None:
         for name in ("feature_dropout", "continuous_noise", "probability_noise", "categorical_dropout"):
@@ -50,14 +51,29 @@ class RegimePositiveMaskConfig:
                 raise ValueError(f"{name} must be non-negative, got {value}")
 
 
-def _continuous_mask(feature_names: Sequence[str] | None, dim: int, device: torch.device) -> torch.Tensor:
+def _prefix_mask(
+    feature_names: Sequence[str] | None,
+    dim: int,
+    device: torch.device,
+    prefixes: Sequence[str],
+    *,
+    default: bool,
+) -> torch.Tensor:
     if not feature_names:
-        return torch.ones(dim, dtype=torch.bool, device=device)
-    prefixes = ("scalar.", "aggregate.", "context.", "probability.")
+        return torch.full((dim,), bool(default), dtype=torch.bool, device=device)
     values = [any(str(name).startswith(prefix) for prefix in prefixes) for name in feature_names]
     if len(values) != dim:
-        return torch.ones(dim, dtype=torch.bool, device=device)
+        return torch.full((dim,), bool(default), dtype=torch.bool, device=device)
     return torch.tensor(values, dtype=torch.bool, device=device)
+
+
+def _continuous_mask(
+    feature_names: Sequence[str] | None,
+    dim: int,
+    device: torch.device,
+    prefixes: Sequence[str],
+) -> torch.Tensor:
+    return _prefix_mask(feature_names, dim, device, prefixes, default=True)
 
 
 def augment_regime_features(
@@ -73,8 +89,16 @@ def augment_regime_features(
         x = x.unsqueeze(0)
     out = x.clone()
     dim = out.size(-1)
-    continuous = _continuous_mask(feature_names, dim, out.device)
+    continuous = _continuous_mask(feature_names, dim, out.device, cfg.keep_scalar_prefixes)
     categorical = ~continuous
+    protected_from_dropout = _prefix_mask(
+        feature_names,
+        dim,
+        out.device,
+        cfg.dropout_protected_prefixes,
+        default=False,
+    )
+    dropout_target = continuous & ~protected_from_dropout
 
     if cfg.continuous_noise > 0:
         noise = torch.randn(out.shape, device=out.device, dtype=out.dtype, generator=generator)
@@ -94,9 +118,9 @@ def augment_regime_features(
 
     if cfg.feature_dropout > 0:
         keep = torch.rand(out.shape, device=out.device, generator=generator) >= cfg.feature_dropout
-        keep = torch.where(continuous.unsqueeze(0), keep, torch.ones_like(keep, dtype=torch.bool))
+        keep = torch.where(dropout_target.unsqueeze(0), keep, torch.ones_like(keep, dtype=torch.bool))
         scale = torch.where(
-            continuous.unsqueeze(0),
+            dropout_target.unsqueeze(0),
             torch.full_like(out, 1.0 / max(1.0 - cfg.feature_dropout, 1e-6)),
             torch.ones_like(out),
         )
