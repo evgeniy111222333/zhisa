@@ -11,6 +11,29 @@ from zhisa.features.indicators import atr, ema
 
 
 @dataclass(frozen=True)
+class TrendScoringConfig:
+    maturity_age_weight: float = 0.45
+    maturity_range_position_weight: float = 0.35
+    maturity_extension_weight: float = 0.20
+    maturity_extension_atr_norm: float = 4.0
+    exhaustion_extension_weight: float = 0.40
+    exhaustion_volume_weight: float = 0.25
+    exhaustion_wick_weight: float = 0.25
+    exhaustion_late_range_weight: float = 0.10
+    exhaustion_extension_atr_norm: float = 4.0
+    pullback_maturity_weight: float = 0.55
+    pullback_exhaustion_weight: float = 0.45
+    mature_threshold: float = 0.65
+    late_threshold: float = 0.78
+    phase_mature_threshold: float = 0.45
+    exhaustion_threshold: float = 0.55
+    phase_exhausted_threshold: float = 0.60
+    extended_atr_threshold: float = 3.0
+    wick_rejection_threshold: float = 0.45
+    wick_range_position_threshold: float = 0.80
+
+
+@dataclass(frozen=True)
 class StructureConfig:
     lookback: int = 128
     swing_window: int = 5
@@ -18,6 +41,7 @@ class StructureConfig:
     trend_age_window: int = 96
     late_range_quantile: float = 0.85
     exhaustion_volume_z: float = 2.0
+    trend_scoring: TrendScoringConfig = field(default_factory=TrendScoringConfig)
 
 
 @dataclass(frozen=True)
@@ -63,6 +87,7 @@ class TrendState:
     extension_atr: float = 0.0
     pullback_risk: float = 0.0
     flags: list[str] = field(default_factory=list)
+    score_breakdown: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,6 +157,7 @@ class MarketStructureAnalyzer:
 
     def _trend(self, df: pd.DataFrame) -> TrendState:
         cfg = self.cfg
+        scoring = cfg.trend_scoring
         close = df["close"].astype(float)
         high = df["high"].astype(float)
         low = df["low"].astype(float)
@@ -179,34 +205,68 @@ class MarketStructureAnalyzer:
         bar_range = max(float(high.iloc[-1] - low.iloc[-1]), 1e-12)
         upper_wick = float(high.iloc[-1] - max(df["open"].iloc[-1], close.iloc[-1])) / bar_range
         lower_wick = float(min(df["open"].iloc[-1], close.iloc[-1]) - low.iloc[-1]) / bar_range
-        if direction == "up" and upper_wick > 0.45 and range_pos > 0.8:
+        if direction == "up" and upper_wick > scoring.wick_rejection_threshold and range_pos > scoring.wick_range_position_threshold:
             wick_rejection = True
-        if direction == "down" and lower_wick > 0.45 and range_pos > 0.8:
+        if direction == "down" and lower_wick > scoring.wick_rejection_threshold and range_pos > scoring.wick_range_position_threshold:
             wick_rejection = True
 
-        maturity = _clip01(0.45 * min(age / max(cfg.trend_age_window, 1), 1.0) + 0.35 * range_pos + 0.20 * min(extension_atr / 4.0, 1.0))
-        exhaustion = _clip01(0.40 * min(extension_atr / 4.0, 1.0) + 0.25 * (volume_z > cfg.exhaustion_volume_z) + 0.25 * wick_rejection + 0.10 * (range_pos > cfg.late_range_quantile))
-        pullback_risk = _clip01(0.55 * maturity + 0.45 * exhaustion)
+        maturity_breakdown = {
+            "age": scoring.maturity_age_weight * min(age / max(cfg.trend_age_window, 1), 1.0),
+            "range_position": scoring.maturity_range_position_weight * range_pos,
+            "extension": scoring.maturity_extension_weight * min(extension_atr / max(scoring.maturity_extension_atr_norm, 1e-12), 1.0),
+        }
+        maturity = _clip01(sum(maturity_breakdown.values()))
+        exhaustion_breakdown = {
+            "extension": scoring.exhaustion_extension_weight * min(extension_atr / max(scoring.exhaustion_extension_atr_norm, 1e-12), 1.0),
+            "volume_z": scoring.exhaustion_volume_weight * float(volume_z > cfg.exhaustion_volume_z),
+            "wick_rejection": scoring.exhaustion_wick_weight * float(wick_rejection),
+            "late_range_position": scoring.exhaustion_late_range_weight * float(range_pos > cfg.late_range_quantile),
+        }
+        exhaustion = _clip01(sum(exhaustion_breakdown.values()))
+        pullback_breakdown = {
+            "maturity": scoring.pullback_maturity_weight * maturity,
+            "exhaustion": scoring.pullback_exhaustion_weight * exhaustion,
+        }
+        pullback_risk = _clip01(sum(pullback_breakdown.values()))
         flags: list[str] = []
-        if maturity > 0.65:
+        if maturity > scoring.mature_threshold:
             flags.append("mature_trend")
-        if maturity > 0.78 or range_pos > cfg.late_range_quantile:
+        if maturity > scoring.late_threshold or range_pos > cfg.late_range_quantile:
             flags.append("late_trend")
-        if exhaustion > 0.55:
+        if exhaustion > scoring.exhaustion_threshold:
             flags.append("exhaustion_risk")
-        if extension_atr > 3.0:
+        if extension_atr > scoring.extended_atr_threshold:
             flags.append("extended_from_value")
 
         if direction == "flat":
             phase = "none"
-        elif exhaustion > 0.6:
+        elif exhaustion > scoring.phase_exhausted_threshold:
             phase = "exhausted"
-        elif maturity > 0.78:
+        elif maturity > scoring.late_threshold:
             phase = "late"
-        elif maturity > 0.45:
+        elif maturity > scoring.phase_mature_threshold:
             phase = "mature"
         else:
             phase = "early"
+        score_breakdown = {
+            "range_position": float(range_pos),
+            "volume_z": float(volume_z),
+            "upper_wick": float(upper_wick),
+            "lower_wick": float(lower_wick),
+            "wick_rejection": float(wick_rejection),
+            "maturity.age": maturity_breakdown["age"],
+            "maturity.range_position": maturity_breakdown["range_position"],
+            "maturity.extension": maturity_breakdown["extension"],
+            "maturity.score": maturity,
+            "exhaustion.extension": exhaustion_breakdown["extension"],
+            "exhaustion.volume_z": exhaustion_breakdown["volume_z"],
+            "exhaustion.wick_rejection": exhaustion_breakdown["wick_rejection"],
+            "exhaustion.late_range_position": exhaustion_breakdown["late_range_position"],
+            "exhaustion.score": exhaustion,
+            "pullback.maturity": pullback_breakdown["maturity"],
+            "pullback.exhaustion": pullback_breakdown["exhaustion"],
+            "pullback.score": pullback_risk,
+        }
 
         return TrendState(
             phase=phase,
@@ -218,6 +278,7 @@ class MarketStructureAnalyzer:
             extension_atr=float(extension_atr),
             pullback_risk=pullback_risk,
             flags=flags,
+            score_breakdown=score_breakdown,
         )
 
     def _liquidity(self, df: pd.DataFrame) -> LiquidityMap:
@@ -288,4 +349,5 @@ __all__ = [
     "MarketStructureReport",
     "StructureConfig",
     "TrendState",
+    "TrendScoringConfig",
 ]

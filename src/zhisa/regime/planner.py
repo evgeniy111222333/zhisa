@@ -12,6 +12,8 @@ from zhisa.regime.gating import (
     regime_action_mask,
     regime_position_size_multiplier,
 )
+from zhisa.regime.memory import RegimeMemory
+from zhisa.regime.priors import PlaybookPrior, PlaybookPriorConfig, RegimePlaybookScorer
 from zhisa.regime.schema import MacroRegime, RegimeReport, RiskMode
 
 
@@ -22,6 +24,11 @@ class TradePlannerConfig:
     min_setup_score: float = 0.05
     near_liquidity_pct: float = 0.01
     transition_wait_threshold: float = 0.55
+    wide_spread_bps: float = 8.0
+    max_normal_slippage_bps: float = 5.0
+    max_passive_slippage_bps: float = 2.0
+    memory_weight: float = 1.0
+    playbook_prior: PlaybookPriorConfig = field(default_factory=PlaybookPriorConfig)
     gate: RegimeActionGateConfig = field(default_factory=RegimeActionGateConfig)
 
 
@@ -38,6 +45,43 @@ class TradeSetup:
     invalidation: list[str]
     confirmation: list[str]
     score: float
+    memory_prior: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ExecutionPlan:
+    order_type: str
+    urgency: str
+    time_in_force: str
+    reduce_only: bool
+    allow_market: bool
+    post_only: bool
+    scale_in_steps: int
+    max_slippage_bps: float
+    cancel_conditions: list[str]
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PositionManagementPlan:
+    intent: str
+    current_position: float
+    target_position: float
+    max_add: float
+    reduce_to: float
+    hold_allowed: bool
+    add_allowed: bool
+    flip_allowed: bool
+    partial_take_profit: bool
+    trailing_style: str
+    de_risk_required: bool
+    notes: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -53,6 +97,8 @@ class TradePlan:
     recommended_action: int
     recommended_playbook: str
     setups: list[TradeSetup]
+    execution: ExecutionPlan
+    position_management: PositionManagementPlan
     no_trade_reasons: list[str]
     management_notes: list[str]
     explanation: dict[str, list[str]]
@@ -67,6 +113,8 @@ class TradePlan:
             "recommended_action": self.recommended_action,
             "recommended_playbook": self.recommended_playbook,
             "setups": [s.to_dict() for s in self.setups],
+            "execution": self.execution.to_dict(),
+            "position_management": self.position_management.to_dict(),
             "no_trade_reasons": self.no_trade_reasons,
             "management_notes": self.management_notes,
             "explanation": self.explanation,
@@ -78,6 +126,7 @@ LONG_PLAYBOOKS = {
     "breakout_retest_long",
     "range_reversion_long",
     "pullback_only_long",
+    "orderflow_confirmed_long",
 }
 SHORT_PLAYBOOKS = {
     "trend_pullback_short",
@@ -85,11 +134,13 @@ SHORT_PLAYBOOKS = {
     "range_reversion_short",
     "panic_retest_short",
     "pullback_only_short",
+    "orderflow_confirmed_short",
 }
 WAIT_PLAYBOOKS = {
     "no_trade_wait",
     "volatility_expansion_wait",
     "transition_wait",
+    "thin_book_wait",
 }
 TACTICAL_PLAYBOOKS = {
     "capitulation_reversal_small",
@@ -98,6 +149,8 @@ TACTICAL_PLAYBOOKS = {
     "relative_strength_only",
     "value_area_reversion",
     "pullback_to_value_only",
+    "orderflow_confirmed_long",
+    "orderflow_confirmed_short",
 }
 
 
@@ -130,8 +183,16 @@ def _target_for_action(action: int, current_position: float) -> float:
 class RegimeTradePlanner:
     """Build actionable trade plans from a RegimeReport."""
 
-    def __init__(self, cfg: Optional[TradePlannerConfig] = None) -> None:
+    def __init__(
+        self,
+        cfg: Optional[TradePlannerConfig] = None,
+        *,
+        memory: RegimeMemory | None = None,
+        playbook_scorer: RegimePlaybookScorer | None = None,
+    ) -> None:
         self.cfg = cfg or TradePlannerConfig()
+        self.memory = memory
+        self.playbook_scorer = playbook_scorer or (RegimePlaybookScorer(memory, self.cfg.playbook_prior) if memory is not None else None)
 
     def plan(
         self,
@@ -154,6 +215,8 @@ class RegimeTradePlanner:
             status = "conditional"
         recommended = setups[0] if setups else None
         recommended_action = self._recommended_action(recommended, mask, current_position)
+        execution = self._execution_plan(report, recommended, status, current_position, risk_budget)
+        position_management = self._position_management(report, recommended, status, current_position, risk_budget)
         management = self._management_notes(report, current_position, risk_budget)
         return TradePlan(
             status=status,
@@ -164,6 +227,8 @@ class RegimeTradePlanner:
             recommended_action=int(recommended_action),
             recommended_playbook=recommended.playbook if recommended else "no_trade_wait",
             setups=setups,
+            execution=execution,
+            position_management=position_management,
             no_trade_reasons=no_trade,
             management_notes=management,
             explanation=report.explanation,
@@ -193,10 +258,11 @@ class RegimeTradePlanner:
         current_position: float,
     ) -> list[TradeSetup]:
         setups: list[TradeSetup] = []
+        priors = self.playbook_scorer.priors(report, report.allowed_playbooks) if self.playbook_scorer is not None else {}
         for playbook in report.allowed_playbooks:
             if playbook in WAIT_PLAYBOOKS:
                 continue
-            setup = self._setup_for_playbook(report, playbook, mask, risk_budget, current_position)
+            setup = self._setup_for_playbook(report, playbook, mask, risk_budget, current_position, priors.get(playbook))
             if setup is not None and setup.score >= self.cfg.min_setup_score:
                 setups.append(setup)
         setups.sort(key=lambda s: s.score, reverse=True)
@@ -209,13 +275,14 @@ class RegimeTradePlanner:
         mask: np.ndarray,
         risk_budget: float,
         current_position: float,
+        prior: PlaybookPrior | None = None,
     ) -> TradeSetup | None:
         direction = self._direction(playbook, report)
         actions = self._actions_for_direction(direction, mask)
-        if not actions:
+        if not actions and risk_budget <= 1e-6:
             return None
         target = self._target_position(direction, risk_budget)
-        score = self._score(report, playbook, direction, risk_budget)
+        score = self._score(report, playbook, direction, risk_budget, prior)
         invalidation = self._invalidation(report, direction)
         confirmation = self._confirmation(report, playbook, direction)
         return TradeSetup(
@@ -230,6 +297,7 @@ class RegimeTradePlanner:
             invalidation=invalidation,
             confirmation=confirmation,
             score=score,
+            memory_prior=prior.to_dict() if prior is not None else {},
         )
 
     def _direction(self, playbook: str, report: RegimeReport) -> str:
@@ -268,11 +336,20 @@ class RegimeTradePlanner:
             return "fade_extreme_after_reclaim"
         if "liquidation" in playbook:
             return "wait_for_liquidation_retest"
+        if "orderflow_confirmed" in playbook:
+            return "wait_for_orderflow_and_structure_alignment"
         if report.trend_phase in {"late", "exhausted"}:
             return "confirmation_only_no_chase"
         return "market_structure_confirmation"
 
-    def _score(self, report: RegimeReport, playbook: str, direction: str, risk_budget: float) -> float:
+    def _score(
+        self,
+        report: RegimeReport,
+        playbook: str,
+        direction: str,
+        risk_budget: float,
+        prior: PlaybookPrior | None = None,
+    ) -> float:
         score = float(report.tradeability_score) * 0.55 + float(report.confidence) * 0.25
         score += min(risk_budget, 1.0) * 0.20
         if playbook in TACTICAL_PLAYBOOKS:
@@ -285,7 +362,158 @@ class RegimeTradePlanner:
             score -= 0.15
         if "entry_directly_into_liquidity" in report.blocked_playbooks:
             score -= 0.10
+        if prior is not None:
+            score += self.cfg.memory_weight * float(prior.score_adjustment)
         return float(np.clip(score, 0.0, 1.0))
+
+    def _execution_plan(
+        self,
+        report: RegimeReport,
+        setup: TradeSetup | None,
+        status: str,
+        current_position: float,
+        risk_budget: float,
+    ) -> ExecutionPlan:
+        orderflow = report.features.get("market_context", {}).get("orderflow", {}) if report.features else {}
+        flags = orderflow.get("flags", []) if isinstance(orderflow, dict) else []
+        spread_bps = float(orderflow.get("spread_bps", 0.0) or 0.0) if isinstance(orderflow, dict) else 0.0
+        poor_liquidity = "wide_spread" in flags or "thin_depth" in flags or spread_bps >= self.cfg.wide_spread_bps
+        transition_wait = report.transition_risk >= self.cfg.transition_wait_threshold or status == "no_trade"
+        de_risk_required = abs(float(current_position)) > float(risk_budget) + 1e-9
+
+        cancel = ["risk mode changes", "state-space transition risk rises"]
+        notes: list[str] = []
+        if setup is not None:
+            cancel.extend(setup.invalidation)
+        if transition_wait:
+            notes.append("wait for transition risk to cool before new exposure")
+        if poor_liquidity:
+            notes.append("poor orderflow liquidity: avoid market orders")
+        if de_risk_required:
+            notes.append("current exposure exceeds regime budget; reduce-only execution")
+
+        if status == "no_trade" and not de_risk_required:
+            return ExecutionPlan(
+                order_type="none",
+                urgency="wait",
+                time_in_force="GTC",
+                reduce_only=True,
+                allow_market=False,
+                post_only=False,
+                scale_in_steps=0,
+                max_slippage_bps=0.0,
+                cancel_conditions=sorted(set(cancel)),
+                notes=notes,
+            )
+
+        reduce_only = bool(de_risk_required or report.risk_mode == RiskMode.OFF.value)
+        if poor_liquidity:
+            order_type = "post_only_limit"
+            urgency = "passive"
+            allow_market = False
+            post_only = True
+            tif = "GTC"
+            max_slippage = self.cfg.max_passive_slippage_bps
+            scale_steps = 3
+        elif transition_wait:
+            order_type = "limit"
+            urgency = "wait"
+            allow_market = False
+            post_only = False
+            tif = "GTC"
+            max_slippage = self.cfg.max_passive_slippage_bps
+            scale_steps = 2
+        elif setup is not None and ("pullback" in setup.entry_style or "retest" in setup.entry_style):
+            order_type = "limit"
+            urgency = "normal"
+            allow_market = False
+            post_only = False
+            tif = "GTC"
+            max_slippage = self.cfg.max_passive_slippage_bps
+            scale_steps = 2
+        else:
+            order_type = "market_or_limit"
+            urgency = "normal" if report.risk_mode != RiskMode.AGGRESSIVE.value else "aggressive"
+            allow_market = True
+            post_only = False
+            tif = "IOC"
+            max_slippage = self.cfg.max_normal_slippage_bps
+            scale_steps = 1 if risk_budget <= 0.35 else 2
+
+        if report.trend_phase in {"late", "exhausted"} and not poor_liquidity:
+            allow_market = False
+            order_type = "limit"
+            urgency = "passive"
+            max_slippage = min(max_slippage, self.cfg.max_passive_slippage_bps)
+            scale_steps = max(scale_steps, 2)
+            notes.append("late/exhausted trend: passive execution only")
+
+        return ExecutionPlan(
+            order_type=order_type,
+            urgency=urgency,
+            time_in_force=tif,
+            reduce_only=reduce_only,
+            allow_market=allow_market,
+            post_only=post_only,
+            scale_in_steps=int(scale_steps),
+            max_slippage_bps=float(max_slippage),
+            cancel_conditions=sorted(set(cancel)),
+            notes=notes,
+        )
+
+    def _position_management(
+        self,
+        report: RegimeReport,
+        setup: TradeSetup | None,
+        status: str,
+        current_position: float,
+        risk_budget: float,
+    ) -> PositionManagementPlan:
+        current = float(current_position)
+        target = float(setup.target_position) if setup is not None else 0.0
+        if status == "no_trade":
+            target = float(np.clip(current, -risk_budget, risk_budget)) if abs(current) > risk_budget else current
+        de_risk_required = abs(current) > risk_budget + 1e-9
+        same_direction = abs(current) <= 1e-9 or abs(target) <= 1e-9 or np.sign(current) == np.sign(target)
+        add_allowed = bool(status != "no_trade" and not de_risk_required and same_direction and report.trend_phase not in {"late", "exhausted"})
+        flip_allowed = bool(status == "tradeable" and report.transition_risk < 0.35 and report.risk_mode in {RiskMode.NORMAL.value, RiskMode.AGGRESSIVE.value})
+        hold_allowed = bool(status != "no_trade" or abs(current) <= risk_budget + 1e-9)
+        if de_risk_required:
+            intent = "reduce"
+        elif status == "no_trade":
+            intent = "hold_or_wait" if abs(current) <= 1e-9 else "hold"
+        elif abs(target) > abs(current) + 1e-9:
+            intent = "add"
+        elif abs(target) < abs(current) - 1e-9:
+            intent = "reduce"
+        else:
+            intent = "hold"
+
+        reduce_to = float(np.sign(current) * min(abs(current), risk_budget)) if abs(current) > 1e-9 else 0.0
+        notes: list[str] = []
+        if de_risk_required:
+            notes.append("reduce exposure to regime risk budget")
+        if not add_allowed and status != "no_trade":
+            notes.append("do not add until regime confirms cleaner execution")
+        if report.trend_phase in {"late", "exhausted"}:
+            notes.append("no add in late/exhausted trend; manage with partials")
+        if report.transition_risk > self.cfg.transition_wait_threshold:
+            notes.append("transition risk high: hold/reduce only")
+
+        return PositionManagementPlan(
+            intent=intent,
+            current_position=current,
+            target_position=float(target),
+            max_add=float(max(0.0, abs(target) - abs(current))) if add_allowed else 0.0,
+            reduce_to=reduce_to,
+            hold_allowed=hold_allowed,
+            add_allowed=add_allowed,
+            flip_allowed=flip_allowed,
+            partial_take_profit=bool(report.take_profit_style in {"partial_trailing", "fast_partial_exits"} or report.trend_phase in {"late", "exhausted"}),
+            trailing_style=report.take_profit_style,
+            de_risk_required=de_risk_required,
+            notes=notes,
+        )
 
     def _invalidation(self, report: RegimeReport, direction: str) -> list[str]:
         inv = [f"risk_mode changes from {report.risk_mode}", "state-space transition risk rises"]
@@ -306,6 +534,8 @@ class RegimeTradePlanner:
             conf.append("price reacts at value area or prior structure")
         if "liquidity" in playbook or "reversion" in playbook:
             conf.append("liquidity sweep followed by reclaim")
+        if "orderflow_confirmed" in playbook:
+            conf.append("orderflow pressure remains aligned with direction")
         if direction == "long":
             conf.append("higher low / bullish continuation confirmation")
         elif direction == "short":
@@ -339,6 +569,9 @@ class RegimeTradePlanner:
             notes.append("late/exhausted trend: use partials and avoid chase")
         if report.transition_risk > 0.55:
             notes.append("transition risk elevated: prefer smaller size or wait")
+        orderflow_flags = _nested_get(report.features, "market_context.orderflow.flags", [])
+        if isinstance(orderflow_flags, list) and ("wide_spread" in orderflow_flags or "thin_depth" in orderflow_flags):
+            notes.append("orderflow liquidity is poor: avoid market orders and reduce urgency")
         return notes
 
 
@@ -348,8 +581,10 @@ def plan_trade(
     current_position: float = 0.0,
     n_actions: int = 9,
     cfg: TradePlannerConfig | None = None,
+    memory: RegimeMemory | None = None,
+    playbook_scorer: RegimePlaybookScorer | None = None,
 ) -> TradePlan:
-    return RegimeTradePlanner(cfg).plan(
+    return RegimeTradePlanner(cfg, memory=memory, playbook_scorer=playbook_scorer).plan(
         report,
         current_position=current_position,
         n_actions=n_actions,
@@ -357,6 +592,11 @@ def plan_trade(
 
 
 __all__ = [
+    "ExecutionPlan",
+    "PositionManagementPlan",
+    "PlaybookPrior",
+    "PlaybookPriorConfig",
+    "RegimePlaybookScorer",
     "TradePlan",
     "TradePlannerConfig",
     "TradeSetup",

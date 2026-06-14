@@ -9,6 +9,39 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
+class CrowdingScoringConfig:
+    funding_abs_weight: float = 0.25
+    funding_z_weight: float = 0.20
+    long_short_weight: float = 0.20
+    open_interest_weight: float = 0.20
+    liquidation_weight: float = 0.15
+    funding_z_norm: float = 3.0
+    funding_z_flag_threshold: float = 2.0
+    long_short_z_flag_threshold: float = 2.0
+    long_short_distance_norm: float = 1.0
+    open_interest_norm_cap: float = 2.0
+    liquidation_norm_cap: float = 2.0
+    direction_pressure_threshold: float = 0.50
+    warning_score_threshold: float = 0.65
+
+
+@dataclass(frozen=True)
+class OrderflowScoringConfig:
+    bid_ask_weight: float = 0.22
+    buy_sell_weight: float = 0.25
+    delta_z_weight: float = 0.20
+    spread_weight: float = 0.13
+    thin_depth_weight: float = 0.12
+    trade_intensity_weight: float = 0.08
+    delta_z_norm: float = 3.0
+    spread_norm_cap: float = 2.0
+    trade_intensity_norm: float = 3.0
+    direction_delta_z_norm: float = 3.0
+    direction_pressure_threshold: float = 0.45
+    warning_score_threshold: float = 0.65
+
+
+@dataclass(frozen=True)
 class MarketContextConfig:
     lookback: int = 96
     short_lookback: int = 12
@@ -24,6 +57,12 @@ class MarketContextConfig:
     high_correlation_threshold: float = 0.65
     fragmented_correlation_threshold: float = 0.35
     lead_score_threshold: float = 0.12
+    orderflow_imbalance_threshold: float = 0.30
+    orderflow_delta_z_threshold: float = 2.0
+    wide_spread_bps: float = 8.0
+    thin_depth_threshold: float = 0.35
+    crowding_scoring: CrowdingScoringConfig = field(default_factory=CrowdingScoringConfig)
+    orderflow_scoring: OrderflowScoringConfig = field(default_factory=OrderflowScoringConfig)
 
 
 @dataclass(frozen=True)
@@ -37,6 +76,7 @@ class CrowdingState:
     crowding_score: float = 0.0
     direction: str = "neutral"
     flags: list[str] = field(default_factory=list)
+    score_breakdown: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -59,9 +99,29 @@ class CorrelationState:
 
 
 @dataclass(frozen=True)
+class OrderflowState:
+    bid_ask_imbalance: float = 0.0
+    buy_sell_imbalance: float = 0.0
+    cumulative_delta: float = 0.0
+    delta_z: float = 0.0
+    trade_intensity_z: float = 0.0
+    spread_bps: float = 0.0
+    depth_imbalance: float = 0.0
+    thin_depth_score: float = 0.0
+    orderflow_score: float = 0.0
+    direction: str = "neutral"
+    flags: list[str] = field(default_factory=list)
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MarketContextReport:
     crowding: CrowdingState = field(default_factory=CrowdingState)
     correlation: CorrelationState = field(default_factory=CorrelationState)
+    orderflow: OrderflowState = field(default_factory=OrderflowState)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,6 +179,7 @@ class MarketContextAnalyzer:
         assets: Optional[Mapping[str, pd.DataFrame]] = None,
         benchmark_symbol: str | None = None,
         btc_symbol: str | None = None,
+        extra_context: Optional[Mapping[str, Any]] = None,
     ) -> MarketContextReport:
         if t is not None:
             if t < 0:
@@ -132,6 +193,8 @@ class MarketContextAnalyzer:
         warnings: list[str] = []
         crowding = self._crowding(work)
         warnings.extend(self._crowding_warnings(crowding))
+        orderflow = self._orderflow(work, extra_context or {})
+        warnings.extend(self._orderflow_warnings(orderflow))
         correlation = self._correlation(
             work,
             symbol=symbol,
@@ -140,10 +203,11 @@ class MarketContextAnalyzer:
             end_time=work.index[-1] if isinstance(work.index, pd.DatetimeIndex) else None,
         )
         warnings.extend(self._correlation_warnings(correlation))
-        return MarketContextReport(crowding=crowding, correlation=correlation, warnings=warnings)
+        return MarketContextReport(crowding=crowding, correlation=correlation, orderflow=orderflow, warnings=warnings)
 
     def _crowding(self, df: pd.DataFrame) -> CrowdingState:
         cfg = self.cfg
+        scoring = cfg.crowding_scoring
         funding_col = _first_existing(df, ("funding", "funding_rate", "fundingRate"))
         oi_col = _first_existing(df, ("open_interest", "oi", "openInterest"))
         ls_col = _first_existing(df, ("long_short_ratio", "longShortRatio", "ls_ratio"))
@@ -172,13 +236,13 @@ class MarketContextAnalyzer:
             liquidation_z = _zscore(liq, float(liq.iloc[-1]), cfg.z_window)
 
         flags: list[str] = []
-        if funding >= cfg.high_funding_abs or funding_z >= 2.0:
+        if funding >= cfg.high_funding_abs or funding_z >= scoring.funding_z_flag_threshold:
             flags.append("crowded_long_funding")
-        if funding <= -cfg.high_funding_abs or funding_z <= -2.0:
+        if funding <= -cfg.high_funding_abs or funding_z <= -scoring.funding_z_flag_threshold:
             flags.append("crowded_short_funding")
-        if long_short >= cfg.high_long_short_ratio or long_short_z >= 2.0:
+        if long_short >= cfg.high_long_short_ratio or long_short_z >= scoring.long_short_z_flag_threshold:
             flags.append("long_short_ratio_long_crowded")
-        if long_short <= cfg.low_long_short_ratio or long_short_z <= -2.0:
+        if long_short <= cfg.low_long_short_ratio or long_short_z <= -scoring.long_short_z_flag_threshold:
             flags.append("long_short_ratio_short_crowded")
         if abs(oi_change) >= cfg.oi_change_threshold:
             flags.append("open_interest_fast_change")
@@ -191,19 +255,23 @@ class MarketContextAnalyzer:
         short_pressure = 0.0
         short_pressure += max(-funding / max(cfg.high_funding_abs, 1e-12), 0.0)
         short_pressure += max((1.0 - long_short) / max(1.0 - cfg.low_long_short_ratio, 1e-12), 0.0)
-        if long_pressure > short_pressure and long_pressure > 0.5:
+        if long_pressure > short_pressure and long_pressure > scoring.direction_pressure_threshold:
             direction = "long_crowded"
-        elif short_pressure > long_pressure and short_pressure > 0.5:
+        elif short_pressure > long_pressure and short_pressure > scoring.direction_pressure_threshold:
             direction = "short_crowded"
         else:
             direction = "neutral"
 
-        score = 0.0
-        score += min(abs(funding) / max(cfg.high_funding_abs, 1e-12), 2.0) * 0.25
-        score += min(abs(funding_z) / 3.0, 1.0) * 0.20
-        score += min(abs(long_short - 1.0), 1.0) * 0.20
-        score += min(abs(oi_change) / max(cfg.oi_change_threshold, 1e-12), 2.0) * 0.20
-        score += min(max(liquidation_z, 0.0) / cfg.liquidation_z_threshold, 2.0) * 0.15
+        breakdown = {
+            "funding_abs": min(abs(funding) / max(cfg.high_funding_abs, 1e-12), 2.0) * scoring.funding_abs_weight,
+            "funding_z": min(abs(funding_z) / max(scoring.funding_z_norm, 1e-12), 1.0) * scoring.funding_z_weight,
+            "long_short_ratio": min(abs(long_short - 1.0) / max(scoring.long_short_distance_norm, 1e-12), 1.0) * scoring.long_short_weight,
+            "open_interest_change": min(abs(oi_change) / max(cfg.oi_change_threshold, 1e-12), scoring.open_interest_norm_cap) * scoring.open_interest_weight,
+            "liquidation_z": min(max(liquidation_z, 0.0) / max(cfg.liquidation_z_threshold, 1e-12), scoring.liquidation_norm_cap) * scoring.liquidation_weight,
+        }
+        score = sum(breakdown.values())
+        breakdown["raw"] = float(score)
+        breakdown["score"] = _clip01(score)
 
         return CrowdingState(
             funding=funding,
@@ -212,10 +280,172 @@ class MarketContextAnalyzer:
             long_short_ratio=long_short,
             long_short_z=long_short_z,
             liquidation_z=liquidation_z,
-            crowding_score=_clip01(score),
+            crowding_score=breakdown["score"],
             direction=direction,
             flags=flags,
+            score_breakdown=breakdown,
         )
+
+    def _orderflow(self, df: pd.DataFrame, extra: Mapping[str, Any]) -> OrderflowState:
+        cfg = self.cfg
+        scoring = cfg.orderflow_scoring
+        bid_col = _first_existing(df, ("bid_volume", "bid_size", "bid_depth", "best_bid_size", "bids_volume"))
+        ask_col = _first_existing(df, ("ask_volume", "ask_size", "ask_depth", "best_ask_size", "asks_volume"))
+        bid_px_col = _first_existing(df, ("best_bid", "bid", "bid_price"))
+        ask_px_col = _first_existing(df, ("best_ask", "ask", "ask_price"))
+        spread_col = _first_existing(df, ("spread_bps", "bid_ask_spread_bps"))
+        buy_col = _first_existing(df, ("taker_buy_volume", "buy_volume", "market_buy_volume"))
+        sell_col = _first_existing(df, ("taker_sell_volume", "sell_volume", "market_sell_volume"))
+        delta_col = _first_existing(df, ("volume_delta", "orderflow_delta", "delta", "cvd_delta"))
+        cvd_col = _first_existing(df, ("cumulative_delta", "cvd", "cumulative_volume_delta"))
+        trades_col = _first_existing(df, ("trades", "trade_count", "num_trades", "n_trades"))
+
+        book = self._orderbook_metrics(extra.get("orderbook") or extra.get("book"))
+        bid_depth = book.get("bid_depth", 0.0)
+        ask_depth = book.get("ask_depth", 0.0)
+        spread_bps = book.get("spread_bps", 0.0)
+
+        if bid_col and ask_col:
+            bid_depth = _finite(df[bid_col].iloc[-1])
+            ask_depth = _finite(df[ask_col].iloc[-1])
+        if spread_col:
+            spread_bps = max(0.0, _finite(df[spread_col].iloc[-1]))
+        elif bid_px_col and ask_px_col:
+            bid = _finite(df[bid_px_col].iloc[-1])
+            ask = _finite(df[ask_px_col].iloc[-1])
+            mid = 0.5 * (bid + ask)
+            if bid > 0 and ask > 0 and mid > 0 and ask >= bid:
+                spread_bps = float((ask - bid) / mid * 10_000.0)
+
+        bid_ask_imb = 0.0
+        if bid_depth + ask_depth > 1e-12:
+            bid_ask_imb = float(np.clip((bid_depth - ask_depth) / (bid_depth + ask_depth), -1.0, 1.0))
+
+        buy = _finite(df[buy_col].iloc[-1]) if buy_col else 0.0
+        sell = _finite(df[sell_col].iloc[-1]) if sell_col else 0.0
+        if buy_col and sell_col and buy + sell > 1e-12:
+            buy_sell_imb = float(np.clip((buy - sell) / (buy + sell), -1.0, 1.0))
+            delta_series = (df[buy_col].astype(float) - df[sell_col].astype(float)).replace([np.inf, -np.inf], np.nan)
+            delta = float(delta_series.iloc[-1])
+        elif delta_col:
+            delta_series = df[delta_col].astype(float).replace([np.inf, -np.inf], np.nan)
+            delta = _finite(delta_series.iloc[-1])
+            vol_col = _first_existing(df, ("volume", "quote_volume", "base_volume"))
+            denom = abs(_finite(df[vol_col].iloc[-1], 1.0)) if vol_col else max(abs(delta), 1.0)
+            buy_sell_imb = float(np.clip(delta / max(denom, 1e-12), -1.0, 1.0))
+        else:
+            delta_series = pd.Series(dtype=float)
+            delta = 0.0
+            buy_sell_imb = 0.0
+
+        cumulative_delta = _finite(df[cvd_col].iloc[-1]) if cvd_col else 0.0
+        if not cvd_col and not delta_series.empty:
+            cumulative_delta = float(delta_series.dropna().iloc[-cfg.lookback:].sum())
+        delta_z = _zscore(delta_series, delta, cfg.z_window) if not delta_series.empty else 0.0
+        trade_intensity_z = 0.0
+        if trades_col:
+            trades = df[trades_col].astype(float).replace([np.inf, -np.inf], np.nan)
+            trade_intensity_z = _zscore(trades, _finite(trades.iloc[-1]), cfg.z_window)
+
+        depth_hist_col = bid_col if bid_col and ask_col else None
+        thin_depth_score = 0.0
+        if depth_hist_col and ask_col:
+            total_depth = df[bid_col].astype(float) + df[ask_col].astype(float)
+            hist = total_depth.replace([np.inf, -np.inf], np.nan).dropna().iloc[-cfg.z_window:]
+            current_depth = bid_depth + ask_depth
+            if hist.size >= 5 and float(hist.median()) > 0:
+                thin_depth_score = _clip01(1.0 - current_depth / float(hist.median()))
+
+        flags: list[str] = []
+        if bid_ask_imb >= cfg.orderflow_imbalance_threshold:
+            flags.append("book_bid_pressure")
+        if bid_ask_imb <= -cfg.orderflow_imbalance_threshold:
+            flags.append("book_ask_pressure")
+        if buy_sell_imb >= cfg.orderflow_imbalance_threshold or delta_z >= cfg.orderflow_delta_z_threshold:
+            flags.append("aggressive_buying")
+        if buy_sell_imb <= -cfg.orderflow_imbalance_threshold or delta_z <= -cfg.orderflow_delta_z_threshold:
+            flags.append("aggressive_selling")
+        if spread_bps >= cfg.wide_spread_bps:
+            flags.append("wide_spread")
+        if thin_depth_score >= cfg.thin_depth_threshold:
+            flags.append("thin_depth")
+        if trade_intensity_z >= cfg.orderflow_delta_z_threshold:
+            flags.append("trade_intensity_spike")
+
+        buy_pressure = max(bid_ask_imb, 0.0) + max(buy_sell_imb, 0.0) + max(delta_z, 0.0) / max(scoring.direction_delta_z_norm, 1e-12)
+        sell_pressure = max(-bid_ask_imb, 0.0) + max(-buy_sell_imb, 0.0) + max(-delta_z, 0.0) / max(scoring.direction_delta_z_norm, 1e-12)
+        if buy_pressure > sell_pressure and buy_pressure > scoring.direction_pressure_threshold:
+            direction = "buy_pressure"
+        elif sell_pressure > buy_pressure and sell_pressure > scoring.direction_pressure_threshold:
+            direction = "sell_pressure"
+        else:
+            direction = "neutral"
+
+        breakdown = {
+            "bid_ask_imbalance": min(abs(bid_ask_imb), 1.0) * scoring.bid_ask_weight,
+            "buy_sell_imbalance": min(abs(buy_sell_imb), 1.0) * scoring.buy_sell_weight,
+            "delta_z": min(abs(delta_z) / max(scoring.delta_z_norm, 1e-12), 1.0) * scoring.delta_z_weight,
+            "spread": min(max(spread_bps, 0.0) / max(cfg.wide_spread_bps, 1e-12), scoring.spread_norm_cap) * scoring.spread_weight,
+            "thin_depth": thin_depth_score * scoring.thin_depth_weight,
+            "trade_intensity": min(max(trade_intensity_z, 0.0) / max(scoring.trade_intensity_norm, 1e-12), 1.0) * scoring.trade_intensity_weight,
+        }
+        score = sum(breakdown.values())
+        breakdown["raw"] = float(score)
+        breakdown["score"] = _clip01(score)
+
+        return OrderflowState(
+            bid_ask_imbalance=bid_ask_imb,
+            buy_sell_imbalance=buy_sell_imb,
+            cumulative_delta=cumulative_delta,
+            delta_z=delta_z,
+            trade_intensity_z=trade_intensity_z,
+            spread_bps=spread_bps,
+            depth_imbalance=bid_ask_imb,
+            thin_depth_score=thin_depth_score,
+            orderflow_score=breakdown["score"],
+            direction=direction,
+            flags=flags,
+            score_breakdown=breakdown,
+        )
+
+    def _orderbook_metrics(self, orderbook: object) -> dict[str, float]:
+        if not isinstance(orderbook, Mapping):
+            return {}
+
+        def side_depth(raw: object) -> tuple[float, float]:
+            if raw is None:
+                return 0.0, 0.0
+            depth = 0.0
+            best = 0.0
+            rows = raw.values() if isinstance(raw, Mapping) else raw
+            try:
+                iterator = iter(rows)
+            except TypeError:
+                return 0.0, 0.0
+            for i, row in enumerate(iterator):
+                price = 0.0
+                size = 0.0
+                if isinstance(row, Mapping):
+                    price = _finite(row.get("price") or row.get("px"))
+                    size = _finite(row.get("size") or row.get("qty") or row.get("amount") or row.get("volume"))
+                else:
+                    try:
+                        price = _finite(row[0])
+                        size = _finite(row[1])
+                    except (TypeError, IndexError):
+                        continue
+                if i == 0:
+                    best = price
+                depth += max(price, 0.0) * max(size, 0.0)
+            return depth, best
+
+        bid_depth, best_bid = side_depth(orderbook.get("bids"))
+        ask_depth, best_ask = side_depth(orderbook.get("asks"))
+        spread_bps = 0.0
+        mid = 0.5 * (best_bid + best_ask)
+        if best_bid > 0 and best_ask > 0 and best_ask >= best_bid and mid > 0:
+            spread_bps = float((best_ask - best_bid) / mid * 10_000.0)
+        return {"bid_depth": bid_depth, "ask_depth": ask_depth, "spread_bps": spread_bps}
 
     def _correlation(
         self,
@@ -325,12 +555,24 @@ class MarketContextAnalyzer:
 
     def _crowding_warnings(self, crowding: CrowdingState) -> list[str]:
         warnings = []
-        if crowding.crowding_score > 0.65:
+        if crowding.crowding_score > self.cfg.crowding_scoring.warning_score_threshold:
             warnings.append(f"crowding elevated ({crowding.direction})")
         if "liquidation_spike" in crowding.flags:
             warnings.append("liquidation spike detected")
         if "open_interest_fast_change" in crowding.flags:
             warnings.append("open interest changing quickly")
+        return warnings
+
+    def _orderflow_warnings(self, orderflow: OrderflowState) -> list[str]:
+        warnings = []
+        if orderflow.orderflow_score > self.cfg.orderflow_scoring.warning_score_threshold:
+            warnings.append(f"orderflow stress elevated ({orderflow.direction})")
+        if "wide_spread" in orderflow.flags:
+            warnings.append("spread is wide")
+        if "thin_depth" in orderflow.flags:
+            warnings.append("book depth is thin")
+        if "aggressive_buying" in orderflow.flags or "aggressive_selling" in orderflow.flags:
+            warnings.append("aggressive taker flow detected")
         return warnings
 
     def _correlation_warnings(self, correlation: CorrelationState) -> list[str]:
@@ -354,21 +596,28 @@ def coerce_market_context(value: object) -> MarketContextReport | None:
         return None
     crowding_raw = value.get("crowding", {})
     corr_raw = value.get("correlation", {})
+    orderflow_raw = value.get("orderflow", {})
     crowding = crowding_raw if isinstance(crowding_raw, CrowdingState) else CrowdingState(**{
         k: crowding_raw[k] for k in CrowdingState.__dataclass_fields__ if isinstance(crowding_raw, Mapping) and k in crowding_raw
     })
     correlation = corr_raw if isinstance(corr_raw, CorrelationState) else CorrelationState(**{
         k: corr_raw[k] for k in CorrelationState.__dataclass_fields__ if isinstance(corr_raw, Mapping) and k in corr_raw
     })
+    orderflow = orderflow_raw if isinstance(orderflow_raw, OrderflowState) else OrderflowState(**{
+        k: orderflow_raw[k] for k in OrderflowState.__dataclass_fields__ if isinstance(orderflow_raw, Mapping) and k in orderflow_raw
+    })
     warnings = list(value.get("warnings", [])) if isinstance(value.get("warnings", []), list) else []
-    return MarketContextReport(crowding=crowding, correlation=correlation, warnings=warnings)
+    return MarketContextReport(crowding=crowding, correlation=correlation, orderflow=orderflow, warnings=warnings)
 
 
 __all__ = [
     "CorrelationState",
     "CrowdingState",
+    "CrowdingScoringConfig",
     "MarketContextAnalyzer",
     "MarketContextConfig",
     "MarketContextReport",
+    "OrderflowState",
+    "OrderflowScoringConfig",
     "coerce_market_context",
 ]

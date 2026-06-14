@@ -9,6 +9,7 @@ from zhisa.regime import (
     RegimeIntelligence,
     RegimeIntelligenceConfig,
     StructureConfig,
+    TrendScoringConfig,
 )
 
 
@@ -48,6 +49,30 @@ def test_structure_detects_late_or_exhausted_trend() -> None:
     assert report.trend.phase in {"late", "exhausted"}
     assert report.trend.maturity_score > 0.6
     assert "late_trend" in report.trend.flags
+    assert report.trend.score_breakdown["maturity.score"] == report.trend.maturity_score
+    assert report.trend.score_breakdown["exhaustion.score"] == report.trend.exhaustion_score
+
+
+def test_trend_scoring_config_controls_maturity_components() -> None:
+    n = 220
+    x = np.linspace(0, 1, n)
+    close = 100.0 * np.exp(0.45 * x)
+    df = _ohlcv_from_close(close)
+
+    default = MarketStructureAnalyzer().analyze(df)
+    no_maturity = MarketStructureAnalyzer(
+        StructureConfig(
+            trend_scoring=TrendScoringConfig(
+                maturity_age_weight=0.0,
+                maturity_range_position_weight=0.0,
+                maturity_extension_weight=0.0,
+            )
+        )
+    ).analyze(df)
+
+    assert default.trend.maturity_score > 0.0
+    assert no_maturity.trend.maturity_score == 0.0
+    assert no_maturity.trend.score_breakdown["maturity.age"] == 0.0
 
 
 def test_structure_builds_liquidity_and_value_map() -> None:

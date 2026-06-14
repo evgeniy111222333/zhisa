@@ -10,9 +10,12 @@ from zhisa.regime import (
     MacroRegime,
     MesoRegime,
     MicroRegime,
+    RegimeClassificationConfig,
     RegimeIntelligence,
     RegimeIntelligenceConfig,
+    RiskPostureConfig,
     RiskMode,
+    TradeabilityScoringConfig,
     compute_regime_features,
 )
 
@@ -52,6 +55,10 @@ def test_bull_trend_report_allows_long_playbooks() -> None:
     assert report.tradeability_score > 0.45
     assert 0.0 <= report.confidence <= 1.0
     assert "trend_score" in report.features["aggregate"]
+    scoring = report.features["scoring"]
+    assert scoring["transition_risk"]["score"] == report.transition_risk
+    assert scoring["tradeability"]["score"] == report.tradeability_score
+    assert "constructive_meso" in scoring["tradeability"]
 
 
 def test_high_vol_crash_goes_defensive() -> None:
@@ -136,3 +143,54 @@ def test_regime_report_is_json_serializable_and_complete() -> None:
         assert key in payload
     assert any("funding" in x for x in payload["explanation"]["danger"])
     json.dumps(payload)
+
+
+def test_tradeability_scoring_config_changes_score_without_api_breakage() -> None:
+    x = np.linspace(0, 1, 320)
+    close = 100.0 * np.exp(0.28 * x)
+    df = _ohlcv_from_close(close)
+
+    default = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(df)
+    conservative = RegimeIntelligence(
+        RegimeIntelligenceConfig(
+            timeframes=("5m", "15m"),
+            tradeability_scoring=TradeabilityScoringConfig(base_score=0.25),
+        )
+    ).analyze(df)
+
+    assert conservative.tradeability_score < default.tradeability_score
+    assert conservative.features["scoring"]["tradeability"]["base"] == 0.25
+
+
+def test_risk_posture_config_controls_default_position_size() -> None:
+    close = np.linspace(100.0, 103.0, 260)
+    df = _ohlcv_from_close(close)
+    report = RegimeIntelligence(
+        RegimeIntelligenceConfig(
+            timeframes=("5m", "15m"),
+            risk_posture=RiskPostureConfig(normal_size_multiplier=0.42),
+        )
+    ).analyze(df)
+
+    assert report.risk_mode == RiskMode.NORMAL.value
+    assert report.position_size_multiplier == 0.42
+
+
+def test_classification_config_controls_macro_probability_surface() -> None:
+    x = np.linspace(0, 1, 320)
+    close = 100.0 * np.exp(0.30 * x)
+    df = _ohlcv_from_close(close)
+
+    default = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(df)
+    muted_bull = RegimeIntelligence(
+        RegimeIntelligenceConfig(
+            timeframes=("5m", "15m"),
+            classification=RegimeClassificationConfig(
+                bull_trend_weight=0.0,
+                bull_efficiency_weight=0.0,
+                bull_return_weight=0.0,
+            ),
+        )
+    ).analyze(df)
+
+    assert muted_bull.probabilities[MacroRegime.BULL_TREND.value] < default.probabilities[MacroRegime.BULL_TREND.value]

@@ -36,6 +36,9 @@ PLAYBOOK_NAMES: tuple[str, ...] = (
     "relative_strength_only",
     "value_area_reversion",
     "pullback_to_value_only",
+    "orderflow_confirmed_long",
+    "orderflow_confirmed_short",
+    "thin_book_wait",
 )
 PLAYBOOK_TO_ID = {name: i for i, name in enumerate(PLAYBOOK_NAMES)}
 PLAYBOOK_DIRECTIONS: dict[str, float] = {
@@ -54,6 +57,9 @@ PLAYBOOK_DIRECTIONS: dict[str, float] = {
     "relative_strength_only": 0.0,
     "pullback_to_value_only": 0.0,
     "liquidation_retest_only": 0.0,
+    "orderflow_confirmed_long": 1.0,
+    "orderflow_confirmed_short": -1.0,
+    "thin_book_wait": 0.0,
 }
 
 

@@ -13,6 +13,8 @@ from zhisa.regime import (
     MarketContextAnalyzer,
     MarketContextConfig,
     MarketContextReport,
+    OrderflowState,
+    OrderflowScoringConfig,
     RegimeFeatureVectorizer,
     RegimeIntelligence,
     RegimeIntelligenceConfig,
@@ -55,11 +57,103 @@ def test_market_context_analyzer_detects_crowded_derivatives_state() -> None:
 
     assert report.crowding.direction == "long_crowded"
     assert report.crowding.crowding_score > 0.65
+    assert report.crowding.score_breakdown["score"] == report.crowding.crowding_score
+    assert report.crowding.score_breakdown["funding_abs"] > 0.0
     assert "crowded_long_funding" in report.crowding.flags
     assert "open_interest_fast_change" in report.crowding.flags
     assert "liquidation_spike" in report.crowding.flags
     assert any("crowding" in w for w in report.warnings)
     json.dumps(report.to_dict())
+
+
+def test_market_context_analyzer_ingests_orderflow_columns() -> None:
+    n = 150
+    close = np.linspace(100.0, 104.0, n)
+    bid_depth = np.r_[np.full(n - 1, 1000.0), [80.0]]
+    ask_depth = np.r_[np.full(n - 1, 1000.0), [300.0]]
+    buy_volume = np.r_[np.full(n - 1, 100.0), [20.0]]
+    sell_volume = np.r_[np.full(n - 1, 100.0), [180.0]]
+    spread_bps = np.r_[np.full(n - 1, 2.0), [14.0]]
+    trades = np.r_[np.full(n - 1, 50.0), [180.0]]
+    df = _ohlcv_from_close(
+        close,
+        bid_depth=bid_depth,
+        ask_depth=ask_depth,
+        taker_buy_volume=buy_volume,
+        taker_sell_volume=sell_volume,
+        spread_bps=spread_bps,
+        trades=trades,
+    )
+
+    report = MarketContextAnalyzer().analyze(df, symbol="ETH/USDT")
+
+    assert report.orderflow.direction == "sell_pressure"
+    assert report.orderflow.orderflow_score > 0.65
+    assert "book_ask_pressure" in report.orderflow.flags
+    assert "aggressive_selling" in report.orderflow.flags
+    assert "wide_spread" in report.orderflow.flags
+    assert "thin_depth" in report.orderflow.flags
+    assert any("orderflow" in w or "spread" in w for w in report.warnings)
+    assert report.orderflow.score_breakdown["spread"] > 0.0
+    assert report.orderflow.score_breakdown["score"] == report.orderflow.orderflow_score
+    json.dumps(report.to_dict())
+
+
+def test_orderflow_scoring_config_controls_contributions() -> None:
+    n = 150
+    close = np.linspace(100.0, 104.0, n)
+    df = _ohlcv_from_close(
+        close,
+        bid_depth=np.r_[np.full(n - 1, 1000.0), [80.0]],
+        ask_depth=np.r_[np.full(n - 1, 1000.0), [300.0]],
+        taker_buy_volume=np.r_[np.full(n - 1, 100.0), [20.0]],
+        taker_sell_volume=np.r_[np.full(n - 1, 100.0), [180.0]],
+        spread_bps=np.r_[np.full(n - 1, 2.0), [14.0]],
+    )
+
+    default = MarketContextAnalyzer().analyze(df)
+    no_spread = MarketContextAnalyzer(
+        MarketContextConfig(orderflow_scoring=OrderflowScoringConfig(spread_weight=0.0))
+    ).analyze(df)
+
+    assert default.orderflow.score_breakdown["spread"] > 0.0
+    assert no_spread.orderflow.score_breakdown["spread"] == 0.0
+    assert no_spread.orderflow.orderflow_score < default.orderflow.orderflow_score
+
+
+def test_market_context_analyzer_ingests_live_orderbook_snapshot() -> None:
+    close = np.linspace(100.0, 101.0, 80)
+    orderbook = {
+        "bids": [[99.95, 3.0], [99.90, 2.0]],
+        "asks": [[100.05, 1.0], [100.10, 0.5]],
+    }
+
+    report = MarketContextAnalyzer().analyze(
+        _ohlcv_from_close(close),
+        symbol="ETH/USDT",
+        extra_context={"orderbook": orderbook},
+    )
+
+    assert report.orderflow.direction == "buy_pressure"
+    assert report.orderflow.bid_ask_imbalance > 0.3
+    assert "book_bid_pressure" in report.orderflow.flags
+    assert report.orderflow.spread_bps > 0.0
+
+
+def test_market_context_orderflow_analysis_is_causal_no_lookahead() -> None:
+    n = 150
+    close = np.linspace(100.0, 104.0, n)
+    buy_volume = np.full(n, 100.0)
+    sell_volume = np.full(n, 100.0)
+    sell_volume[-1] = 500.0
+    df = _ohlcv_from_close(close, taker_buy_volume=buy_volume, taker_sell_volume=sell_volume)
+    analyzer = MarketContextAnalyzer()
+
+    full_at_t = analyzer.analyze(df, t=90)
+    truncated = analyzer.analyze(df.iloc[:91])
+
+    assert full_at_t.to_dict() == truncated.to_dict()
+    assert full_at_t.orderflow.orderflow_score < 0.65
 
 
 def test_market_context_analyzer_detects_benchmark_led_cross_asset_regime() -> None:
@@ -133,11 +227,43 @@ def test_regime_intelligence_uses_market_context_for_risk_and_playbooks() -> Non
     assert any("crowding" in x for x in report.explanation["danger"])
 
 
+def test_regime_intelligence_uses_orderflow_for_risk_playbooks_and_plan() -> None:
+    n = 260
+    close = np.linspace(120.0, 96.0, n)
+    bid_depth = np.r_[np.full(n - 1, 1000.0), [80.0]]
+    ask_depth = np.r_[np.full(n - 1, 1000.0), [300.0]]
+    buy_volume = np.r_[np.full(n - 1, 100.0), [20.0]]
+    sell_volume = np.r_[np.full(n - 1, 100.0), [180.0]]
+    spread_bps = np.r_[np.full(n - 1, 2.0), [14.0]]
+    df = _ohlcv_from_close(
+        close,
+        bid_depth=bid_depth,
+        ask_depth=ask_depth,
+        taker_buy_volume=buy_volume,
+        taker_sell_volume=sell_volume,
+        spread_bps=spread_bps,
+    )
+
+    report = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(
+        df,
+        symbol="ETH/USDT",
+    )
+
+    assert report.features["market_context"]["orderflow"]["direction"] == "sell_pressure"
+    assert "orderflow_confirmed_short" in report.allowed_playbooks
+    assert "thin_book_wait" in report.allowed_playbooks
+    assert "market_order_entry" in report.blocked_playbooks
+    assert report.risk_mode in {RiskMode.DEFENSIVE.value, RiskMode.REDUCED.value}
+    assert any("orderflow" in x for x in report.explanation["why"])
+    assert any("spread" in x or "book depth" in x for x in report.explanation["danger"])
+
+
 def test_regime_intelligence_accepts_precomputed_market_context() -> None:
     close = np.linspace(100.0, 120.0, 180)
     supplied = MarketContextReport(
         crowding=CrowdingState(crowding_score=0.8, direction="long_crowded", flags=["crowded_long_funding"]),
         correlation=CorrelationState(regime="fragmented", avg_correlation=0.1, n_assets=4),
+        orderflow=OrderflowState(orderflow_score=0.7, direction="sell_pressure", flags=["aggressive_selling"]),
         warnings=["synthetic context"],
     )
     report = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(
@@ -146,7 +272,9 @@ def test_regime_intelligence_accepts_precomputed_market_context() -> None:
     )
 
     assert report.features["market_context"]["correlation"]["regime"] == "fragmented"
+    assert report.features["market_context"]["orderflow"]["direction"] == "sell_pressure"
     assert "market_beta_chase" in report.blocked_playbooks
+    assert "orderflow_confirmed_short" in report.allowed_playbooks
     assert any("fragmented" in x for x in report.explanation["danger"])
 
 
@@ -165,6 +293,12 @@ def test_regime_vectorizer_includes_market_context_features() -> None:
             leader_lead_score=0.3,
             n_assets=4,
         ),
+        orderflow=OrderflowState(
+            buy_sell_imbalance=-0.7,
+            delta_z=-2.8,
+            orderflow_score=0.72,
+            direction="sell_pressure",
+        ),
     )
     report = RegimeIntelligence(RegimeIntelligenceConfig(timeframes=("5m", "15m"))).analyze(
         _ohlcv_from_close(close),
@@ -176,8 +310,11 @@ def test_regime_vectorizer_includes_market_context_features() -> None:
 
     assert vec.shape == (vectorizer.dim,)
     assert vec[names.index("context.crowding.crowding_score")] == 0.8
+    assert vec[names.index("context.orderflow.orderflow_score")] == 0.72
+    assert vec[names.index("context.orderflow.delta_z")] == -2.8
     assert vec[names.index("context.correlation.leader_lead_score")] == 0.3
     assert vec[names.index("crowding_direction.long_crowded")] == 1.0
+    assert vec[names.index("orderflow_direction.sell_pressure")] == 1.0
     assert vec[names.index("correlation_regime.benchmark_led")] == 1.0
 
 

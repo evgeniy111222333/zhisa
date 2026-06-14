@@ -40,6 +40,13 @@ CONTEXT_SCALAR_FIELDS: tuple[str, ...] = (
     "crowding.long_short_z",
     "crowding.liquidation_z",
     "crowding.crowding_score",
+    "orderflow.bid_ask_imbalance",
+    "orderflow.buy_sell_imbalance",
+    "orderflow.delta_z",
+    "orderflow.trade_intensity_z",
+    "orderflow.spread_bps",
+    "orderflow.thin_depth_score",
+    "orderflow.orderflow_score",
     "correlation.avg_correlation",
     "correlation.leader_lead_score",
     "correlation.market_breadth",
@@ -57,6 +64,7 @@ CONTEXT_SCALAR_FIELDS: tuple[str, ...] = (
 )
 
 CROWDING_DIRECTIONS: tuple[str, ...] = ("neutral", "long_crowded", "short_crowded")
+ORDERFLOW_DIRECTIONS: tuple[str, ...] = ("neutral", "buy_pressure", "sell_pressure")
 CORRELATION_REGIMES: tuple[str, ...] = (
     "single_asset",
     "benchmark_led",
@@ -84,6 +92,7 @@ class RegimeVectorizerConfig:
     micro_classes: tuple[str, ...] = field(default_factory=lambda: _enum_values(MicroRegime))
     risk_modes: tuple[str, ...] = field(default_factory=lambda: _enum_values(RiskMode))
     crowding_directions: tuple[str, ...] = CROWDING_DIRECTIONS
+    orderflow_directions: tuple[str, ...] = ORDERFLOW_DIRECTIONS
     correlation_regimes: tuple[str, ...] = CORRELATION_REGIMES
     trend_phases: tuple[str, ...] = TREND_PHASES
     include_probabilities: bool = True
@@ -129,6 +138,7 @@ class RegimeFeatureVectorizer:
         names += [f"micro.{name}" for name in self.cfg.micro_classes]
         names += [f"risk_mode.{name}" for name in self.cfg.risk_modes]
         names += [f"crowding_direction.{name}" for name in self.cfg.crowding_directions]
+        names += [f"orderflow_direction.{name}" for name in self.cfg.orderflow_directions]
         names += [f"correlation_regime.{name}" for name in self.cfg.correlation_regimes]
         names += [f"trend_phase.{name}" for name in self.cfg.trend_phases]
         if self.cfg.include_probabilities:
@@ -158,6 +168,7 @@ class RegimeFeatureVectorizer:
         values.extend(_one_hot(report.micro_regime, cfg.micro_classes))
         values.extend(_one_hot(report.risk_mode, cfg.risk_modes))
         values.extend(_one_hot(str(_nested_get(market_context, "crowding.direction", "neutral")), cfg.crowding_directions))
+        values.extend(_one_hot(str(_nested_get(market_context, "orderflow.direction", "neutral")), cfg.orderflow_directions))
         values.extend(_one_hot(str(_nested_get(market_context, "correlation.regime", "single_asset")), cfg.correlation_regimes))
         values.extend(_one_hot(str(getattr(report, "trend_phase", _nested_get(market_structure, "trend.phase", "none"))), cfg.trend_phases))
         if cfg.include_probabilities:
@@ -177,6 +188,7 @@ __all__ = [
     "CONTEXT_SCALAR_FIELDS",
     "CORRELATION_REGIMES",
     "CROWDING_DIRECTIONS",
+    "ORDERFLOW_DIRECTIONS",
     "TREND_PHASES",
     "RegimeFeatureVectorizer",
     "RegimeVectorizerConfig",
