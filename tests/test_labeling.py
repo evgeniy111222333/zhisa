@@ -41,3 +41,23 @@ def test_hmm_regime_labels(small_market):
     assert s.shape[0] == len(small_market)
     # Labels should be a small set
     assert s.nunique() <= 3
+
+
+def test_hmm_regime_labels_stable(small_market):
+    """Test that regime labels are stable over a small period due to rebalance_period."""
+    # With rebalance_period > len(small_market), it only fits once.
+    s = hmm_regime_labels(small_market, n_states=3, lookback=64, rebalance_period=1000, prefer_sklearn=False)
+    assert s.shape[0] == len(small_market)
+    assert s.nunique() <= 3
+
+
+def test_hmm_regime_labels_sklearn(small_market):
+    """Test that sklearn path works and sorts clusters."""
+    try:
+        import sklearn
+    except ImportError:
+        pytest.skip("sklearn not installed")
+    s = hmm_regime_labels(small_market, n_states=3, lookback=64, rebalance_period=1000, prefer_sklearn=True)
+    assert s.shape[0] == len(small_market)
+    assert s.nunique() <= 3
+

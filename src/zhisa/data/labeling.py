@@ -159,38 +159,64 @@ def hmm_regime_labels(
     df: pd.DataFrame,
     n_states: int = 4,
     lookback: int = 256,
+    rebalance_period: int = 1000,
     random_state: int = 0,
     prefer_sklearn: bool = True,
 ) -> pd.Series:
-    """HMM-style regime labelling using a rolling GMM.
-
-    At each bar ``t`` we fit a GMM on the most recent ``lookback``
-    log-returns, then label ``t`` with the cluster of its own return.
-    If scikit-learn is available we use it; otherwise a small NumPy
-    GMM fallback is used. For production use, prefer a proper HMM
-    (hmmlearn); this is a fast approximation.
+    """HMM-style regime labelling using a rolling GMM with sorted clusters.
+    
+    To avoid Label Switching and slow performance, the GMM is only retrained
+    every `rebalance_period` steps. The predicted clusters are sorted by their
+    variance so that 0 is always the lowest volatility regime (flat market)
+    and `n_states-1` is the highest volatility regime (storm/breakout).
     """
     log_ret = np.log(df["close"]).diff().fillna(0.0).to_numpy()
     n = len(log_ret)
     labels = np.zeros(n, dtype=np.int64)
     rng = np.random.default_rng(random_state)
     use_sklearn = prefer_sklearn
+    
     if use_sklearn:
         try:
             from sklearn.mixture import GaussianMixture  # type: ignore
         except ImportError:
             use_sklearn = False
+
+    last_gmm = None
+    last_mapping = None
+
     for t in range(lookback, n):
-        window = log_ret[t - lookback:t].reshape(-1, 1)
+        # Retrain only periodically or on the first valid step
+        if last_gmm is None or t % rebalance_period == 0:
+            window = log_ret[t - lookback:t].reshape(-1, 1)
+            if use_sklearn:
+                gmm = GaussianMixture(
+                    n_components=n_states, covariance_type="full",
+                    random_state=random_state, max_iter=15,
+                )
+                gmm.fit(window)
+                # Sort components by variance
+                variances = gmm.covariances_.flatten()
+                sorted_idx = np.argsort(variances)
+                last_mapping = {original: new_label for new_label, original in enumerate(sorted_idx)}
+                last_gmm = gmm
+            else:
+                means, lab = _gmm_numpy(window, n_states, n_iter=15, rng=rng)
+                variances = []
+                for i in range(n_states):
+                    cluster_points = window[lab == i]
+                    variances.append(np.var(cluster_points) if len(cluster_points) > 0 else 0.0)
+                sorted_idx = np.argsort(variances)
+                last_mapping = {original: new_label for new_label, original in enumerate(sorted_idx)}
+                last_gmm = means  # For fallback, just store means
+                
+        # Predict current step
         if use_sklearn:
-            gmm = GaussianMixture(
-                n_components=n_states, covariance_type="full",
-                random_state=random_state, max_iter=15,
-            )
-            gmm.fit(window)
-            labels[t] = int(gmm.predict(log_ret[t].reshape(1, -1))[0])
+            raw_label = int(last_gmm.predict(log_ret[t].reshape(1, -1))[0])
+            labels[t] = last_mapping[raw_label]
         else:
-            _, lab = _gmm_numpy(window, n_states, n_iter=15, rng=rng)
-            # The new point's label is the modal cluster near the recent point
-            labels[t] = int(lab[-1])
+            dist = np.abs(last_gmm - log_ret[t])
+            raw_label = int(np.argmin(dist))
+            labels[t] = last_mapping[raw_label]
+
     return pd.Series(labels, index=df.index, name="regime")

@@ -88,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--bars", type=int, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s4/policy.pt")
+    parser.add_argument("--s2-checkpoint", type=str, default=None, help="Path to S2 checkpoint to load base weights from.")
+    parser.add_argument("--fast-render", action="store_true", help="Use numpy renderer without matplotlib")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
 
@@ -95,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(cfg_path) if cfg_path.exists() else None
     seed = int(cfg.get("seed", 0)) if cfg else 0
     set_seed(seed)
+
+    if args.fast_render:
+        import os
+        os.environ["ZHISA_FAST_RENDER"] = "1"
 
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
@@ -119,6 +125,15 @@ def main(argv: list[str] | None = None) -> int:
         window=spec.chart_window, image_size=spec.image_size,
         n_actions=9, n_regime_classes=spec.n_regime_states,
     )
+
+    if args.s2_checkpoint:
+        print(f"Loading S2 checkpoint from {args.s2_checkpoint}...")
+        import torch
+        sd = torch.load(args.s2_checkpoint, map_location="cpu", weights_only=False)
+        from zhisa.training.s1_ssl import _filter_matching_state_dict
+        filtered = _filter_matching_state_dict(sd["model"], model)
+        model.load_state_dict(filtered, strict=False)
+        print("S2 weights loaded successfully.")
 
     ppo_cfg = _build_ppo_cfg(cfg, args, env_cfg)
 

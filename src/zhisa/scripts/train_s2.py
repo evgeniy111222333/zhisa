@@ -36,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s2/model.pt")
+    parser.add_argument("--s1-checkpoint", type=str, default=None, help="Path to S1 checkpoint to load base weights from.")
+    parser.add_argument("--fast-render", action="store_true", help="Use numpy renderer without matplotlib")
+    parser.add_argument("--workers", type=int, default=1, help="Number of workers for dataset preparation")
+    parser.add_argument("--cache-charts", action="store_true", help="Cache rendered charts in memory")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
 
@@ -45,6 +49,10 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 0)) if cfg else 0
     set_seed(seed)
 
+    if args.fast_render:
+        import os
+        os.environ["ZHISA_FAST_RENDER"] = "1"
+
     # Data
     df = load_market_dataframe(args, seed=seed, default_bars=args.bars)
     spec = SampleSpec(
@@ -52,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         feature_window=int(cfg.get("chart_window", 32)) if cfg else 32,
         image_size=int(cfg.get("image_size", 32)) if cfg else 32,
     )
-    ds = MarketDataset(df, spec=spec)
+    ds = MarketDataset(df, spec=spec, cache_charts=args.cache_charts)
 
     # Model
     n_feat = ds._features.shape[1]
@@ -65,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
         n_regime_classes=spec.n_regime_states,
     )
 
+    if args.s1_checkpoint:
+        print(f"Loading S1 checkpoint from {args.s1_checkpoint}...")
+        sd = torch.load(args.s1_checkpoint, map_location="cpu", weights_only=False)
+        from zhisa.training.s1_ssl import _filter_matching_state_dict
+        filtered = _filter_matching_state_dict(sd["model"], model)
+        model.load_state_dict(filtered, strict=False)
+        print("S1 weights loaded successfully.")
+
     # Training config
     epochs = args.epochs or (int(cfg.get("epochs", 2)) if cfg else 2)
     bs = args.batch_size or (int(cfg.get("batch_size", 32)) if cfg else 32)
@@ -75,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     loss = MultiTaskLoss(LossWeights())
     trainer = SupervisedTrainer(
         model, loss, TrainConfig(epochs=epochs, batch_size=bs, device=device, optim=optim_cfg,
-                                 checkpoint=args.checkpoint),
+                                 checkpoint=args.checkpoint, num_workers=args.workers),
     )
     history = trainer.fit(ds)
     print("Training complete. Final loss:", history["history"][-1]["loss"])

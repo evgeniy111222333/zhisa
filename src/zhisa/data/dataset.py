@@ -107,7 +107,7 @@ class MarketDataset(Dataset):
         
         logger.info("MarketDataset Init: Step 5/5: Computing HMM Regime Labels (Macro States)...")
         self._regime = hmm_regime_labels(
-            df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=False
+            df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=True
         )
 
         logger.info("MarketDataset Init: All tables processed and ready for DataLoader!")

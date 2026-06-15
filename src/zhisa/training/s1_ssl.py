@@ -424,8 +424,9 @@ class SSLPretrainer:
                 " ".join(f"{k}={v:.4f}" for k, v in avg.items()),
             )
             timer.reset()
-        if cfg.checkpoint:
-            self.save(cfg.checkpoint)
+            if cfg.checkpoint:
+                # Save checkpoint after every epoch to prevent data loss!
+                self.save(cfg.checkpoint)
         return {"history": history, "final_step": self._step}
 
     # ------------------------------------------------------------------

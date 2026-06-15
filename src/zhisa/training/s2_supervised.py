@@ -121,8 +121,8 @@ class SupervisedTrainer:
             if val_ds is not None and cfg.eval_every and (epoch + 1) % cfg.eval_every == 0:
                 val_metrics = self.evaluate(val_ds)
                 history[-1]["val"] = val_metrics
-        if cfg.checkpoint:
-            self.save(cfg.checkpoint)
+            if cfg.checkpoint:
+                self.save(cfg.checkpoint)
         return {"history": history, "final_step": self._step}
 
     @torch.no_grad()
