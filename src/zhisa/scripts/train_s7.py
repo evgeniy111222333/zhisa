@@ -35,6 +35,7 @@ from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.models.latent_actor_critic import LatentActorCritic, LatentActorCriticConfig
 from zhisa.models.policy import build_default_policy
 from zhisa.models.world_model import WorldModel, WorldModelConfig
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.decision_transformer import embed_trajectories
 from zhisa.training.dyna_ppo import DynaPPOConfig, DynaPPOTrainer
 from zhisa.training.world_model_trainer import (
@@ -105,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--random-base", action="store_true")
     parser.add_argument("--checkpoint", type=str, default="artifacts/s7_wm/wm.pt")
     parser.add_argument("--dyna-checkpoint", type=str, default="artifacts/s7_wm/dyna.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -115,7 +117,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Market + dataset probe ---
     n_bars = args.bars or (int(cfg.get("bars", 4000)) if cfg else 4000)
-    df = generate_market(MarketConfig(n_bars=n_bars))
+    if str(getattr(args, "data_source", "synthetic")) == "synthetic":
+        df = generate_market(MarketConfig(n_bars=n_bars))
+    else:
+        df = load_market_dataframe(args, seed=seed, default_bars=n_bars)
     chart_window = int(cfg.get("chart_window", 16)) if cfg else 16
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
     spec = SampleSpec(

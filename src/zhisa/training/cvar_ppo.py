@@ -299,6 +299,12 @@ class CVaRPPOTrainer(PPOTrainer):
             "ppo_config": self.cfg.__dict__,
             "lambda_cvar": self.lambda_cvar,
             "cvar_history": self.cvar_history,
+            "checkpoint_meta": {
+                "stage": "s4_cvar_ppo",
+                "trading_policy_ready": True,
+                "policy_head_trained": True,
+                "policy_training": "cvar_constrained_ppo",
+            },
         }, p)
         logger.info("cvar-ppo checkpoint saved to %s", p)
 

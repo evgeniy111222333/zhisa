@@ -380,5 +380,11 @@ class CurriculumTrainer:
             "model": self.model.state_dict(),
             "model_config": cfg_dict,  # canonical name
             "stages": [asdict(s) for s in self.stages],
+            "checkpoint_meta": {
+                "stage": "s3_curriculum",
+                "trading_policy_ready": False,
+                "policy_head_trained": False,
+                "reason": "S3 curriculum uses supervised stages; use S2b/S4+ for trading policy replay.",
+            },
         }, p)
         logger.info("curriculum checkpoint saved to %s", p)

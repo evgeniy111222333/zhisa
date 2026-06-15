@@ -64,6 +64,50 @@ def test_shared_loader_reads_csv_and_trims_latest(tmp_path: Path):
     assert loaded.index.tz is not None
 
 
+def test_shared_loader_joins_local_futures_context(tmp_path: Path):
+    df = _realish_ohlcv(40)
+    csv_path = tmp_path / "ohlcv.csv"
+    export = df.copy()
+    export.index.name = "timestamp"
+    export.to_csv(csv_path)
+
+    context_root = tmp_path / "ctx"
+    context_dir = context_root / "BTCUSDT" / "5m"
+    context_dir.mkdir(parents=True)
+    context = pd.DataFrame(
+        {
+            "funding_rate": np.linspace(-0.0001, 0.0001, len(df)),
+            "open_interest": np.linspace(1000.0, 1200.0, len(df)),
+            "taker_buy_volume": np.linspace(80.0, 140.0, len(df)),
+            "taker_sell_volume": np.linspace(120.0, 90.0, len(df)),
+        },
+        index=df.index,
+    )
+    context.to_parquet(context_dir / "context.parquet")
+
+    args = SimpleNamespace(
+        data_source="csv",
+        csv=str(csv_path),
+        timestamp_column="timestamp",
+        start=None,
+        end=None,
+        latest_bars=12,
+        bars=0,
+        tsdb_root=str(tmp_path / "tsdb"),
+        symbol="BTC/USDT",
+        timeframe="5m",
+        with_futures_context=True,
+        futures_context_root=str(context_root),
+    )
+
+    loaded = load_market_dataframe(args)
+    assert len(loaded) == 12
+    assert list(loaded.columns[:5]) == ["open", "high", "low", "close", "volume"]
+    assert {"funding_rate", "open_interest", "taker_buy_volume", "taker_sell_volume"}.issubset(loaded.columns)
+    assert loaded["funding_rate"].notna().all()
+    assert loaded["open_interest"].iloc[-1] == context["open_interest"].iloc[-1]
+
+
 def test_ingest_real_data_uses_public_ohlcv_loader(tmp_path: Path, monkeypatch):
     fetched = _realish_ohlcv(30)
 
@@ -132,6 +176,22 @@ def test_backtest_script_can_read_tsdb_data(tmp_path: Path, monkeypatch):
     assert rc == 0
     assert len(captured["df"]) == 25
     assert captured["cfg"].seed == 0
+
+
+def test_checkpoint_guard_warns_for_not_trading_ready(capsys):
+    ckpt = {
+        "checkpoint_meta": {
+            "stage": "s2_supervised",
+            "trading_policy_ready": False,
+            "reason": "policy head is not trained for trading",
+        }
+    }
+
+    backtest_script._warn_if_checkpoint_not_trading_ready(ckpt, "model.pt")
+
+    captured = capsys.readouterr()
+    assert "not marked as a trading-ready policy" in captured.out
+    assert "s2_supervised" in captured.out
 
 
 def test_paper_run_writes_no_money_artifacts(tmp_path: Path):

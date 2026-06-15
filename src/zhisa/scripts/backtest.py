@@ -28,6 +28,24 @@ def _checkpoint_policy_config(ckpt: dict) -> dict:
     return {}
 
 
+def _checkpoint_policy_metadata(ckpt: dict) -> dict:
+    """Return checkpoint metadata used for replay/backtest guardrails."""
+    meta = ckpt.get("checkpoint_meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _warn_if_checkpoint_not_trading_ready(ckpt: dict, checkpoint: str | None) -> None:
+    """Emit a clear warning for checkpoints whose policy head is not trade-trained."""
+    meta = _checkpoint_policy_metadata(ckpt)
+    if meta.get("trading_policy_ready") is False:
+        stage = meta.get("stage", "unknown")
+        reason = meta.get("reason", "checkpoint metadata marks this policy as not trading-ready")
+        print(
+            "WARNING: checkpoint is not marked as a trading-ready policy "
+            f"(stage={stage}, checkpoint={checkpoint}). {reason}"
+        )
+
+
 def _random_policy(seed: int = 0):
     rng = np.random.default_rng(seed)
 
@@ -78,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     env_cfg = EnvConfig(seed=args.seed)
     if args.checkpoint and Path(args.checkpoint).exists():
         ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        _warn_if_checkpoint_not_trading_ready(ckpt, args.checkpoint)
         cfg = _checkpoint_policy_config(ckpt)
         model = build_default_policy(
             in_numeric_features=int(cfg.get("in_numeric_features", 32)),

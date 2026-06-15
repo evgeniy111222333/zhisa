@@ -59,8 +59,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s1/model.pt")
+    parser.add_argument("--fast-render", action="store_true", help="Use pure-numpy renderer")
+    parser.add_argument("--workers", type=int, default=None, help="DataLoader num_workers")
+    parser.add_argument("--cache-charts", action="store_true", help="Cache rendered charts in RAM")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
+
+    if args.fast_render:
+        import os
+        os.environ["ZHISA_FAST_RENDER"] = "1"
+    if args.workers is not None:
+        import os
+        os.environ["ZHISA_SSL_WORKERS"] = str(args.workers)
 
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path) if cfg_path.exists() else None
@@ -77,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         feature_window=chart_window,
         image_size=image_size,
     )
-    ds = MarketDataset(df, spec=spec)
+    ds = MarketDataset(df, spec=spec, cache_charts=args.cache_charts)
 
     # Model
     n_feat = ds._features.shape[1]
@@ -94,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     ssl_cfg = _ssl_config_from(cfg)
     epochs = args.epochs or (int(cfg.get("epochs", 2)) if cfg else 2)
     bs = args.batch_size or (int(cfg.get("batch_size", 32)) if cfg else 32)
-    device = args.device or (str(cfg.get("device", _default_device())) if cfg else _default_device())
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     ssl_cfg.epochs = epochs
     ssl_cfg.batch_size = bs
     ssl_cfg.device = device

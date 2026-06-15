@@ -20,6 +20,7 @@ from zhisa.storage.tsdb import TimeSeriesDB
 
 
 DATA_SOURCES = ("synthetic", "tsdb", "csv")
+DEFAULT_FUTURES_CONTEXT_ROOT = "data/futures_context/binance_usdm"
 
 
 def add_market_data_args(
@@ -48,6 +49,20 @@ def add_market_data_args(
         default=None,
         help="Keep only the latest N bars after loading.",
     )
+    group.add_argument(
+        "--with-futures-context",
+        action="store_true",
+        help=(
+            "Join public futures context columns (funding, open interest, "
+            "long/short ratios, taker flow) from a local context parquet."
+        ),
+    )
+    group.add_argument(
+        "--futures-context-root",
+        type=str,
+        default=DEFAULT_FUTURES_CONTEXT_ROOT,
+        help="Root containing SYMBOL/timeframe/context.parquet files.",
+    )
 
 
 def parse_utc_timestamp(value: str | None) -> Optional[pd.Timestamp]:
@@ -70,7 +85,7 @@ def timestamp_to_ms(value: str | None) -> int | None:
     return int(ts.timestamp() * 1000)
 
 
-def normalize_ohlcv_frame(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_ohlcv_frame(df: pd.DataFrame, *, keep_extra: bool = False) -> pd.DataFrame:
     """Coerce a DataFrame into the project OHLCV schema."""
     if df is None or len(df) == 0:
         raise ValueError("OHLCV frame is empty")
@@ -96,14 +111,106 @@ def normalize_ohlcv_frame(df: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"OHLCV frame is missing required columns: {missing}")
 
-    out = out[list(OHLCV_COLUMNS)].astype(float)
-    out = out.replace([float("inf"), float("-inf")], float("nan")).dropna(how="any")
+    ordered = pd.DataFrame(index=out.index)
+    for col in OHLCV_COLUMNS:
+        ordered[col] = pd.to_numeric(out[col], errors="coerce")
+    if keep_extra:
+        for col in out.columns:
+            if col in OHLCV_COLUMNS:
+                continue
+            numeric = pd.to_numeric(out[col], errors="coerce")
+            if numeric.notna().any():
+                ordered[str(col)] = numeric
+
+    out = ordered.replace([float("inf"), float("-inf")], float("nan"))
+    out = out.dropna(subset=list(OHLCV_COLUMNS), how="any")
     out = out[~out.index.duplicated(keep="last")].sort_index()
 
-    errors = validate_ohlcv(out, strict=True)
+    errors = validate_ohlcv(out[list(OHLCV_COLUMNS)], strict=True)
     if errors:
         raise ValueError("Invalid OHLCV frame: " + "; ".join(errors))
     return out
+
+
+def futures_context_symbol_slug(symbol: str) -> str:
+    """Return the storage slug used by the local Binance USD-M context files."""
+    clean = str(symbol).strip().upper()
+    if ":" in clean:
+        clean = clean.split(":", 1)[0]
+    return clean.replace("/", "").replace("-", "").replace("_", "").replace(" ", "")
+
+
+def futures_context_path(root: str | Path, symbol: str, timeframe: str) -> Path:
+    """Return the expected local parquet path for a futures context series."""
+    return Path(root) / futures_context_symbol_slug(symbol) / str(timeframe) / "context.parquet"
+
+
+def load_futures_context_frame(
+    root: str | Path,
+    symbol: str,
+    timeframe: str,
+) -> pd.DataFrame:
+    """Load a local futures context parquet as a numeric, timestamp-indexed frame."""
+    path = futures_context_path(root, symbol, timeframe)
+    if not path.exists():
+        raise FileNotFoundError(f"Futures context not found: {path}")
+
+    frame = pd.read_parquet(path)
+    if "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+        frame = frame.set_index("timestamp")
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError(f"Futures context must have a DatetimeIndex or timestamp column: {path}")
+    frame.index = pd.to_datetime(frame.index, utc=True)
+    frame.index.name = "timestamp"
+    frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+
+    numeric = pd.DataFrame(index=frame.index)
+    for col in frame.columns:
+        name = str(col).strip().lower()
+        if not name or name in OHLCV_COLUMNS:
+            continue
+        values = pd.to_numeric(frame[col], errors="coerce")
+        if values.notna().any():
+            numeric[name] = values
+    numeric = numeric.replace([float("inf"), float("-inf")], float("nan"))
+    if numeric.empty:
+        raise ValueError(f"Futures context has no numeric columns: {path}")
+    return numeric
+
+
+def join_futures_context(
+    df: pd.DataFrame,
+    context: pd.DataFrame,
+    *,
+    symbol: str,
+    timeframe: str,
+) -> pd.DataFrame:
+    """Left-join context by bar timestamp without backfilling future values."""
+    if df.empty:
+        return df
+    overlap = df.index.intersection(context.index)
+    if len(overlap) == 0:
+        raise ValueError(
+            f"No timestamp overlap between OHLCV and futures context for {symbol}@{timeframe}"
+        )
+
+    context_cols = [c for c in context.columns if c not in df.columns]
+    colliding = [c for c in context.columns if c in df.columns]
+    if colliding:
+        renamed = {c: f"futures_context_{c}" for c in colliding}
+        context = context.rename(columns=renamed)
+        context_cols = list(context.columns)
+
+    joined = df.join(context[context_cols].reindex(df.index), how="left")
+    joined.attrs["futures_context"] = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "columns": context_cols,
+        "overlap_rows": int(len(overlap)),
+        "coverage_pct": float(100.0 * len(overlap) / max(len(df), 1)),
+    }
+    return joined
 
 
 def load_market_dataframe(
@@ -152,6 +259,14 @@ def load_market_dataframe(
         raise ValueError(f"Unknown data source: {source!r}")
 
     df = normalize_ohlcv_frame(df)
+    if bool(getattr(args, "with_futures_context", False)):
+        symbol = str(getattr(args, "symbol", "BTC/USDT"))
+        timeframe = str(getattr(args, "timeframe", "5m"))
+        context_root = getattr(args, "futures_context_root", DEFAULT_FUTURES_CONTEXT_ROOT)
+        context = load_futures_context_frame(context_root, symbol, timeframe)
+        df = join_futures_context(df, context, symbol=symbol, timeframe=timeframe)
+        df = normalize_ohlcv_frame(df, keep_extra=True)
+
     limit = getattr(args, "latest_bars", None)
     if limit is None and source != "synthetic" and bars > 0:
         limit = bars
@@ -170,11 +285,17 @@ def load_market_dataframe(
 def frame_summary(df: pd.DataFrame) -> dict[str, Any]:
     """Return a compact JSON-friendly summary for a loaded OHLCV frame."""
     report = audit_ohlcv(df)
+    context_cols = [c for c in df.columns if c not in OHLCV_COLUMNS]
     return {
         "rows": int(len(df)),
         "start": str(df.index[0]) if len(df) else None,
         "end": str(df.index[-1]) if len(df) else None,
         "columns": list(df.columns),
+        "context_columns": context_cols,
+        "context_non_null_pct": {
+            col: float(100.0 * df[col].notna().sum() / max(len(df), 1))
+            for col in context_cols
+        },
         "quality_clean": bool(report.clean),
         "quality_issues": [
             {

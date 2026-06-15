@@ -447,6 +447,12 @@ class SSLPretrainer:
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "ssl_config": self.cfg.__dict__,
+            "checkpoint_meta": {
+                "stage": "s1_ssl",
+                "trading_policy_ready": False,
+                "policy_head_trained": False,
+                "reason": "S1 is representation pretraining; fine-tune with S2b/S4+ before paper trading.",
+            },
         }
         if self.teacher is not None:
             payload["teacher"] = self.teacher.state_dict()

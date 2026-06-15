@@ -10,12 +10,14 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from zhisa.config import load_config
 from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig
 from zhisa.training.s1_ssl import SSLPretrainer, SSLConfig
@@ -84,13 +86,70 @@ def _build_stages(cfg) -> list[CurriculumStage]:
     return out
 
 
+def _fit_real_curriculum(
+    *,
+    model,
+    factory,
+    df,
+    stages: list[CurriculumStage],
+    spec: SampleSpec,
+    checkpoint: str,
+) -> list[dict]:
+    """Run a chronological curriculum over real market slices."""
+    if not stages:
+        stages = [
+            CurriculumStage("real_early", epochs=1),
+            CurriculumStage("real_middle", epochs=1),
+            CurriculumStage("real_recent", epochs=1),
+        ]
+    indices = np.array_split(np.arange(len(df)), len(stages))
+    history: list[dict] = []
+    for stage, idx in zip(stages, indices):
+        if idx.size <= spec.chart_window + 2:
+            continue
+        stage_df = df.iloc[int(idx[0]) : int(idx[-1]) + 1].copy()
+        ds = MarketDataset(stage_df, spec=spec)
+        trainer = factory(model)
+        result = trainer.fit(ds)
+        losses = []
+        for entry in result.get("history", []):
+            if "loss" in entry:
+                losses.append(float(entry["loss"]))
+            elif "total" in entry:
+                losses.append(float(entry["total"]))
+        final_loss = losses[-1] if losses else 0.0
+        history.append({
+            "stage": stage.name,
+            "n_bars": int(len(stage_df)),
+            "epochs": int(stage.epochs),
+            "final_loss": final_loss,
+            "best_loss": min(losses) if losses else final_loss,
+            "start": str(stage_df.index[0]),
+            "end": str(stage_df.index[-1]),
+        })
+    p = Path(checkpoint)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    cfg_dict = model.cfg.__dict__.copy()
+    if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
+        cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
+    torch.save({
+        "model": model.state_dict(),
+        "model_config": cfg_dict,
+        "stages": history,
+        "mode": "real_chronological_curriculum",
+    }, p)
+    return history
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train S3 curriculum.")
     parser.add_argument("--config", type=str, default="configs/s3_curriculum.yaml")
     parser.add_argument("--inner", type=str, default=None,
                         choices=("s1", "s2"),
                         help="Inner trainer kind (overrides config).")
+    parser.add_argument("--bars", type=int, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s3/model.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -104,8 +163,16 @@ def main(argv: list[str] | None = None) -> int:
     spec = SampleSpec(chart_window=chart_window, feature_window=chart_window,
                       image_size=image_size)
 
+    real_df = None
+    if str(getattr(args, "data_source", "synthetic")) != "synthetic":
+        real_df = load_market_dataframe(
+            args,
+            seed=int(cfg.get("seed", 0)) if cfg else 0,
+            default_bars=args.bars or 4500,
+        )
+
     # Probe to know the model's required input dim.
-    probe_df = generate_market(MarketConfig(n_bars=300, seed=0))
+    probe_df = real_df.iloc[: min(len(real_df), 300)].copy() if real_df is not None else generate_market(MarketConfig(n_bars=300, seed=0))
     probe_ds = MarketDataset(probe_df, spec=spec)
     n_feat = probe_ds._features.shape[1]
     n_ctx = probe_ds._time_features.shape[1]
@@ -119,6 +186,23 @@ def main(argv: list[str] | None = None) -> int:
     inner = args.inner or (str(cfg.get("inner", "s1")) if cfg else "s1")
     factory = _make_inner_factory(cfg, inner)
     stages = _build_stages(cfg) or None
+
+    if real_df is not None:
+        stage_history = _fit_real_curriculum(
+            model=model,
+            factory=factory,
+            df=real_df,
+            stages=list(stages or []),
+            spec=spec,
+            checkpoint=args.checkpoint,
+        )
+        print("S3 real-data curriculum complete.")
+        if stage_history:
+            import pandas as pd
+            print(pd.DataFrame(stage_history).to_string(index=False))
+            print(f"Final loss: {stage_history[-1]['final_loss']:.5f}")
+        print(f"checkpoint saved to: {args.checkpoint}")
+        return 0
 
     ct = CurriculumTrainer(
         factory, model, stages=stages,

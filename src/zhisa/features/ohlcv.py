@@ -1,6 +1,7 @@
-"""OHLCV-derived numeric features: returns, ranges, body/wick ratios, vol."""
+"""OHLCV-derived numeric features plus optional market-context features."""
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 import numpy as np
@@ -17,8 +18,168 @@ from zhisa.features.indicators import (
 )
 
 
+_OHLCV_COLUMNS = {"open", "high", "low", "close", "volume"}
+_PRICE_CONTEXT_SUFFIXES = (
+    "_open",
+    "_high",
+    "_low",
+    "_close",
+    "_price",
+    "_mark_price",
+)
+_DIRECT_CONTEXT_COLUMNS = {
+    "funding_rate",
+    "premium_index",
+    "global_long_account",
+    "global_short_account",
+    "top_account_long_account",
+    "top_account_short_account",
+    "top_position_long_account",
+    "top_position_short_account",
+}
+_RATIO_CONTEXT_COLUMNS = {
+    "global_long_short_ratio",
+    "top_account_long_short_ratio",
+    "top_position_long_short_ratio",
+    "long_short_ratio",
+    "top_trader_long_short_ratio",
+    "taker_buy_sell_ratio",
+}
+_POSITIVE_SIZE_CONTEXT_COLUMNS = {
+    "open_interest",
+    "open_interest_value",
+    "cmc_circulating_supply",
+    "futures_volume",
+    "futures_quote_volume",
+    "trades",
+    "kline_taker_buy_volume",
+    "kline_taker_sell_volume",
+    "kline_taker_buy_quote_volume",
+    "kline_taker_sell_quote_volume",
+    "taker_buy_volume",
+    "taker_sell_volume",
+}
+
+
 def _safe_log(x: pd.Series) -> pd.Series:
     return np.log(x.replace(0, np.nan))
+
+
+def _clean_context_feature_name(name: str) -> str:
+    clean = re.sub(r"[^0-9a-zA-Z_]+", "_", str(name).strip().lower())
+    clean = re.sub(r"_+", "_", clean).strip("_")
+    return clean or "unknown"
+
+
+def _numeric_context_columns(df: pd.DataFrame) -> list[str]:
+    cols: list[str] = []
+    for col in df.columns:
+        name = str(col)
+        if name in _OHLCV_COLUMNS:
+            continue
+        values = pd.to_numeric(df[col], errors="coerce")
+        if values.notna().any():
+            cols.append(name)
+    return cols
+
+
+def _log1p_signed(series: pd.Series) -> pd.Series:
+    return np.sign(series) * np.log1p(series.abs())
+
+
+def _safe_log_ratio(numer: pd.Series, denom: pd.Series) -> pd.Series:
+    return np.log((numer.clip(lower=0.0) + 1e-12) / (denom.clip(lower=0.0) + 1e-12))
+
+
+def _add_market_context_features(
+    out: pd.DataFrame,
+    df: pd.DataFrame,
+    close: pd.Series,
+    volume: pd.Series | None,
+) -> None:
+    """Append causal futures/market-context features when extra columns exist."""
+    context_cols = _numeric_context_columns(df)
+    if not context_cols:
+        return
+
+    handled: set[str] = set()
+    availability = pd.Series(0.0, index=df.index, dtype=float)
+    for col in context_cols:
+        availability += pd.to_numeric(df[col], errors="coerce").notna().astype(float)
+    out["ctx_available_frac"] = availability / max(len(context_cols), 1)
+
+    def series(col: str) -> pd.Series:
+        return pd.to_numeric(df[col], errors="coerce")
+
+    def add(name: str, values: pd.Series) -> None:
+        out[f"ctx_{_clean_context_feature_name(name)}"] = values
+
+    price_cols = [
+        col for col in context_cols
+        if _clean_context_feature_name(col).endswith(_PRICE_CONTEXT_SUFFIXES)
+        or _clean_context_feature_name(col) in {"mark_price", "index_price", "funding_mark_price"}
+    ]
+    for col in price_cols:
+        name = _clean_context_feature_name(col)
+        values = series(col)
+        add(f"{name}_basis", (values - close) / (close + 1e-12))
+        handled.add(col)
+
+    for col in context_cols:
+        name = _clean_context_feature_name(col)
+        values = series(col)
+        if name in _DIRECT_CONTEXT_COLUMNS:
+            add(name, values)
+            handled.add(col)
+        elif name in _RATIO_CONTEXT_COLUMNS:
+            add(f"{name}_log", np.log(values.clip(lower=1e-12)))
+            handled.add(col)
+        elif name in _POSITIVE_SIZE_CONTEXT_COLUMNS:
+            positive = values.clip(lower=0.0)
+            add(f"{name}_log1p", np.log1p(positive))
+            add(f"{name}_logret_1", _safe_log(positive).diff())
+            handled.add(col)
+
+    if {"taker_buy_volume", "taker_sell_volume"}.issubset(df.columns):
+        buy = series("taker_buy_volume")
+        sell = series("taker_sell_volume")
+        total = buy + sell
+        add("taker_imbalance", (buy - sell) / (total + 1e-12))
+        add("taker_buy_sell_log_ratio", _safe_log_ratio(buy, sell))
+        handled.update({"taker_buy_volume", "taker_sell_volume"})
+
+    if {"kline_taker_buy_volume", "kline_taker_sell_volume"}.issubset(df.columns):
+        buy = series("kline_taker_buy_volume")
+        sell = series("kline_taker_sell_volume")
+        total = buy + sell
+        add("kline_taker_imbalance", (buy - sell) / (total + 1e-12))
+        add("kline_taker_buy_sell_log_ratio", _safe_log_ratio(buy, sell))
+        handled.update({"kline_taker_buy_volume", "kline_taker_sell_volume"})
+
+    if "volume_delta" in df.columns:
+        delta = series("volume_delta")
+        if "taker_buy_volume" in df.columns and "taker_sell_volume" in df.columns:
+            denom = series("taker_buy_volume") + series("taker_sell_volume")
+        elif volume is not None:
+            denom = volume
+        else:
+            denom = delta.abs()
+        add("volume_delta_imbalance", delta / (denom.abs() + 1e-12))
+        handled.add("volume_delta")
+
+    if "open_interest" in df.columns and volume is not None:
+        oi = series("open_interest").clip(lower=0.0)
+        add("open_interest_over_volume_log", np.log1p(oi / (volume.clip(lower=0.0) + 1e-12)))
+        handled.add("open_interest")
+
+    # Keep unknown numeric context columns visible, but transform them into
+    # scale-tolerant signed log features so one large raw value cannot dominate.
+    for col in context_cols:
+        if col in handled:
+            continue
+        name = _clean_context_feature_name(col)
+        values = series(col)
+        add(f"{name}_signed_log1p", _log1p_signed(values))
 
 
 def compute_ohlcv_features(
@@ -32,6 +193,7 @@ def compute_ohlcv_features(
     rsi_period: int = 14,
     bb_period: int = 20,
     donchian_period: int = 20,
+    include_market_context: bool = True,
 ) -> pd.DataFrame:
     """Build a feature matrix aligned to ``df.index``.
 
@@ -98,6 +260,9 @@ def compute_ohlcv_features(
         # VWAP distance
         vwap = vwap_session(df)
         out["vwap_dist"] = (close - vwap) / (close + 1e-12)
+
+    if include_market_context:
+        _add_market_context_features(out, df, close, vol)
 
     out = out.replace([np.inf, -np.inf], np.nan)
     return out.astype(np.float64)

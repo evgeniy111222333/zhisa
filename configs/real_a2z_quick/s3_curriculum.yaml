@@ -1,0 +1,19 @@
+seed: 0
+device: cpu
+inner: s2
+inner_batch_size: 64
+inner_lr: 0.0003
+inner_log_every: 10000
+chart_window: 16
+image_size: 16
+stages:
+  - name: real_early
+    n_bars: 256
+    epochs: 1
+  - name: real_middle
+    n_bars: 256
+    epochs: 1
+  - name: real_recent
+    n_bars: 256
+    epochs: 1
+

@@ -17,12 +17,14 @@ import sys
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
 import torch.nn as nn
 
 from zhisa.config import load_config
 from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig
 from zhisa.training.s1_ssl import SSLConfig, SSLPretrainer
@@ -80,11 +82,19 @@ def _build_inner_factory(
     if inner_kind == "s2":
         s2_spec = spec
         def factory(model):
-            return SupervisedTrainer(
+            trainer = SupervisedTrainer(
                 model, MultiTaskLoss(LossWeights()),
                 TrainConfig(epochs=epochs, batch_size=bs, log_every=10_000,
                             device="cpu", optim=OptimConfig(lr=lr)),
             )
+            original_fit = trainer.fit
+
+            def wrapped_fit(data):
+                ds = data if isinstance(data, MarketDataset) else MarketDataset(data, spec=s2_spec)
+                return original_fit(ds)
+
+            trainer.fit = wrapped_fit  # type: ignore[assignment]
+            return trainer
         if s2_spec is None:
             raise ValueError("S2 supervised inner trainer needs a SampleSpec")
         return factory
@@ -136,7 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inner", type=str, default=None,
                         choices=("s1", "s2", "s4"),
                         help="Inner trainer kind (overrides YAML).")
+    parser.add_argument("--bars", type=int, default=None)
     parser.add_argument("--checkpoint", type=str, default="artifacts/s5/policy.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -149,8 +161,12 @@ def main(argv: list[str] | None = None) -> int:
     spec = SampleSpec(chart_window=chart_window, feature_window=chart_window,
                       image_size=image_size)
 
+    real_df = None
+    if str(getattr(args, "data_source", "synthetic")) != "synthetic":
+        real_df = load_market_dataframe(args, seed=seed, default_bars=args.bars or 2000)
+
     # Probe feature dims with a tiny market.
-    probe_df = generate_market(MarketConfig(n_bars=200, seed=seed))
+    probe_df = real_df.iloc[: min(len(real_df), 200)].copy() if real_df is not None else generate_market(MarketConfig(n_bars=200, seed=seed))
     probe_ds = MarketDataset(probe_df, spec=spec)
     n_feat = probe_ds._features.shape[1]
     n_ctx = probe_ds._time_features.shape[1]
@@ -166,7 +182,18 @@ def main(argv: list[str] | None = None) -> int:
     continual_cfg = _build_continual_cfg(cfg, args)
 
     trainer = OnlineContinualTrainer(model, continual_cfg, factory, spec=spec)
-    result = trainer.fit()
+    market_stream = None
+    if real_df is not None:
+        frames = []
+        bars_per_iter = max(chart_window + 8, int(continual_cfg.bars_per_iter))
+        if len(real_df) <= bars_per_iter:
+            frames = [real_df.copy() for _ in range(int(continual_cfg.n_iterations))]
+        else:
+            max_start = len(real_df) - bars_per_iter
+            starts = np.linspace(0, max_start, num=int(continual_cfg.n_iterations), dtype=int)
+            frames = [real_df.iloc[int(s) : int(s) + bars_per_iter].copy() for s in starts]
+        market_stream = iter(frames)
+    result = trainer.fit(market_stream=market_stream)
 
     print("S5 online continual training complete.")
     print(result.as_frame().to_string(index=False))

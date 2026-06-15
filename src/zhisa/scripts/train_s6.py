@@ -35,6 +35,7 @@ from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.data.trajectory import collect_trajectories
 from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.models.policy import build_default_policy
+from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.decision_transformer import (
     DTConfig,
     DecisionTransformer,
@@ -129,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--random-base", action="store_true",
                         help="Collect trajectories with a uniform-random policy.")
     parser.add_argument("--checkpoint", type=str, default="artifacts/s6_dt/dt.pt")
+    add_market_data_args(parser)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -138,7 +140,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Data ---
     n_bars = args.bars or (int(cfg.get("bars", 4000)) if cfg else 4000)
-    df = generate_market(MarketConfig(n_bars=n_bars))
+    if str(getattr(args, "data_source", "synthetic")) == "synthetic":
+        df = generate_market(MarketConfig(n_bars=n_bars))
+    else:
+        df = load_market_dataframe(args, seed=seed, default_bars=n_bars)
     chart_window = int(cfg.get("chart_window", 16)) if cfg else 16
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
     spec = SampleSpec(

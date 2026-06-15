@@ -29,6 +29,9 @@ from zhisa.data.labeling import (
 from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
 from zhisa.features.time import compute_time_features
 from zhisa.rendering.chart_renderer import render_chart
+from zhisa.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -79,10 +82,14 @@ class MarketDataset(Dataset):
         self.spec = spec
         self.tb_cfg = triple_barrier_cfg or TripleBarrierConfig()
 
+        logger.info(f"MarketDataset Init: Processing {len(df)} bars. Step 1/5: Computing OHLCV features...")
         self._features = compute_ohlcv_features(
             df, include_volume=spec.include_volume, include_indicators=spec.include_indicators
         )
+        
+        logger.info("MarketDataset Init: Step 2/5: Computing Time embeddings...")
         self._time_features = compute_time_features(df)
+        
         # Primary triple-barrier at smallest horizon; use horizon 16 by default
         primary = spec.horizons[len(spec.horizons) // 2] if spec.horizons else 16
         self._tb_cfg_primary = TripleBarrierConfig(
@@ -91,12 +98,19 @@ class MarketDataset(Dataset):
             max_holding=primary,
             atr_window=self.tb_cfg.atr_window,
         )
+        
+        logger.info("MarketDataset Init: Step 3/5: Computing Triple Barrier Labels (Returns/Directions)...")
         self._tb = triple_barrier(df, self._tb_cfg_primary)
+        
+        logger.info("MarketDataset Init: Step 4/5: Computing Realized Volatility...")
         self._vol = realized_volatility(df, horizon=primary)
+        
+        logger.info("MarketDataset Init: Step 5/5: Computing HMM Regime Labels (Macro States)...")
         self._regime = hmm_regime_labels(
             df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=False
         )
 
+        logger.info("MarketDataset Init: All tables processed and ready for DataLoader!")
         self._cache_charts = cache_charts
         self._chart_cache: dict[int, torch.Tensor] = {}
 

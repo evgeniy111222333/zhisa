@@ -1,0 +1,24 @@
+seed: 0
+device: cpu
+bars: 512
+chart_window: 16
+image_size: 16
+n_regime_states: 4
+n_actions: 9
+episodes: 2
+max_steps_per_episode: 32
+wm_epochs: 1
+wm_batch_size: 32
+wm_learning_rate: 0.001
+dyna_rounds: 1
+dyna_horizon: 4
+dyna_rollouts: 8
+ppo_epochs: 1
+ppo_minibatch_size: 8
+dyna_learning_rate: 0.0003
+random_base: true
+env_cfg:
+  episode_length: 32
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  max_leverage: 3.0

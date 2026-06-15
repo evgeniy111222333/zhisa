@@ -508,5 +508,11 @@ class PPOTrainer:
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "ppo_config": self.cfg.__dict__,
+            "checkpoint_meta": {
+                "stage": "s4_ppo",
+                "trading_policy_ready": True,
+                "policy_head_trained": True,
+                "policy_training": "ppo_reward_optimization",
+            },
         }, p)
         logger.info("ppo checkpoint saved to %s", p)

@@ -1,0 +1,27 @@
+seed: 0
+device: cpu
+trainer: bc
+expert: triple_barrier
+bars: 512
+chart_window: 16
+image_size: 16
+n_regime_states: 4
+batch_size: 64
+grad_clip: 1.0
+log_every: 10000
+bc_epochs: 1
+optim:
+  lr: 0.0003
+  weight_decay: 0.01
+  scheduler: cosine
+  warmup_steps: 0
+loss_weights:
+  direction: 1.0
+  volatility: 0.5
+  regime: 0.3
+  return_pred: 0.5
+  policy: 1.0
+  value: 0.5
+  uncertainty: 0.05
+expert_kwargs: {}
+

@@ -64,6 +64,45 @@ def test_ohlcv_feature_columns(small_market):
         assert col in feats.columns, f"missing feature {col}"
 
 
+def test_market_context_features_are_included_and_causal(small_market):
+    df = small_market.copy()
+    n = len(df)
+    df["mark_price"] = df["close"] * 1.0002
+    df["index_price"] = df["close"] * 0.9998
+    df["funding_rate"] = np.linspace(-0.0001, 0.0001, n)
+    df["open_interest"] = np.linspace(1000.0, 1300.0, n)
+    df["global_long_short_ratio"] = np.linspace(0.85, 1.25, n)
+    df["taker_buy_volume"] = np.linspace(80.0, 140.0, n)
+    df["taker_sell_volume"] = np.linspace(120.0, 90.0, n)
+    df["volume_delta"] = df["taker_buy_volume"] - df["taker_sell_volume"]
+
+    feats = compute_ohlcv_features(df)
+    expected = {
+        "ctx_mark_price_basis",
+        "ctx_index_price_basis",
+        "ctx_funding_rate",
+        "ctx_open_interest_log1p",
+        "ctx_open_interest_logret_1",
+        "ctx_global_long_short_ratio_log",
+        "ctx_taker_imbalance",
+        "ctx_volume_delta_imbalance",
+        "ctx_available_frac",
+    }
+    assert expected.issubset(feats.columns)
+
+    shifted_future = df.copy()
+    shifted_future.iloc[-1, shifted_future.columns.get_loc("open_interest")] = 1_000_000.0
+    shifted_future.iloc[-1, shifted_future.columns.get_loc("taker_buy_volume")] = 1_000_000.0
+    shifted_feats = compute_ohlcv_features(shifted_future)
+
+    past_idx = feats.index[-2]
+    pd.testing.assert_series_equal(
+        feats.loc[past_idx, sorted(expected)],
+        shifted_feats.loc[past_idx, sorted(expected)],
+        check_names=False,
+    )
+
+
 def test_time_features_shape(small_market):
     tf = compute_time_features(small_market)
     assert tf.shape[0] == len(small_market)

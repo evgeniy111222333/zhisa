@@ -167,5 +167,11 @@ class SupervisedTrainer:
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "train_config": self.cfg.__dict__,
+            "checkpoint_meta": {
+                "stage": "s2_supervised",
+                "trading_policy_ready": False,
+                "policy_head_trained": False,
+                "reason": "S2 trains supervised market heads; use S2b/S4+ for paper trading policies.",
+            },
         }, p)
         logger.info("checkpoint saved to %s", p)

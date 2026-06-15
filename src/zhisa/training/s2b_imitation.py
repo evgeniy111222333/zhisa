@@ -325,6 +325,12 @@ class BehavioralCloningTrainer:
             "loss": self.loss.state_dict(),
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
+            "checkpoint_meta": {
+                "stage": "s2b_imitation",
+                "trading_policy_ready": True,
+                "policy_head_trained": True,
+                "policy_training": "behavioral_cloning_or_dagger",
+            },
         }, p)
         logger.info("bc checkpoint saved to %s", p)
 

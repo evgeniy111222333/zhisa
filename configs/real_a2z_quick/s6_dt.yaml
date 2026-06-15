@@ -1,0 +1,28 @@
+seed: 0
+device: cpu
+bars: 512
+chart_window: 16
+image_size: 16
+n_regime_states: 4
+n_actions: 9
+episodes: 2
+max_steps_per_episode: 32
+gamma: 1.0
+context_length: 4
+d_model: 32
+n_heads: 4
+n_layers: 1
+dropout: 0.1
+learning_rate: 0.001
+batch_size: 32
+epochs: 1
+val_frac: 0.0
+rtg_loss_weight: 0.0
+max_rtg_clip: 10.0
+random_base: true
+env_cfg:
+  episode_length: 32
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  max_leverage: 3.0
+

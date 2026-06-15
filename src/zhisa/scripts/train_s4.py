@@ -131,8 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     history = result["history"]
     if history:
         last = history[-1]
-        print(f"final episode: return={last.get('episode_return', 0.0):.4f} "
-              f"steps={last.get('steps', 0)}")
+        ret = last.get("episode_return", last.get("mean_return", 0.0))
+        steps = last.get("steps", last.get("total_steps", last.get("rollout_steps", 0)))
+        print(f"final episode: return={ret:.4f} steps={steps}")
     print(f"checkpoint saved to: {args.checkpoint}")
     return 0
 
