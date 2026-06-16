@@ -146,6 +146,25 @@ class CVaRPPOTrainer(PPOTrainer):
             rewards, values, dones, last_value=0.0,
             gamma=cfg.gamma, lam=cfg.gae_lambda,
         )
+        # -----------------------------------------------------------
+        # CVaR Advantage Penalization (The Math Fix)
+        # -----------------------------------------------------------
+        ep_returns_np = ep_returns_t.cpu().numpy()
+        var_threshold = float(np.percentile(ep_returns_np, cfg.cvar_alpha * 100))
+        
+        T = len(rewards)
+        step_to_ep_return = np.zeros(T, dtype=np.float32)
+        ep_idx = 0
+        for t in range(T):
+            step_to_ep_return[t] = ep_returns_np[ep_idx]
+            if dones[t] > 0.5 and ep_idx < len(ep_returns_np) - 1:
+                ep_idx += 1
+                
+        # Penalize steps belonging to tail episodes that violate the threshold
+        violation_mask = (step_to_ep_return <= var_threshold) & (step_to_ep_return < -cfg.cvar_threshold)
+        if np.any(violation_mask) and self.lambda_cvar > 0:
+            advantages[violation_mask] -= float(self.lambda_cvar)
+
         to_t = lambda a: (  # noqa: E731
             a.to(self.device, non_blocking=True)
             if torch.is_tensor(a)
@@ -163,18 +182,10 @@ class CVaRPPOTrainer(PPOTrainer):
         if has_history:
             history_t = to_t(stacked["history"]).float()
 
-        # Per-iteration constants: CVaR and lambda do not depend on the
-        # policy — they are fixed for the whole PPO update phase. Computing
-        # them once here (instead of inside every mini-batch) saves
-        # ``n_epochs * n_minibatches`` redundant ``cvar_torch`` calls and
-        # keeps the computation graph minimal so the backward pass only
-        # flows through the PPO terms.
+        # For logging purposes only (the actual penalty is in adv_t)
         with torch.no_grad():
-            cvar_value_const = cvar_torch(ep_returns_t, cfg.cvar_alpha).detach()
+            cvar_value_const = cvar_torch(ep_returns_t, cfg.cvar_alpha)
         cvar_penalty_const = F.relu(-cvar_value_const - cfg.cvar_threshold)
-        # lambda is treated as a Python float; multiply as a Python
-        # scalar to avoid an extra CUDA kernel launch per step.
-        cvar_term_const = float(self.lambda_cvar) * cvar_penalty_const
 
         stats = {
             "policy": [], "value": [], "entropy": [], "total": [],
@@ -205,8 +216,8 @@ class CVaRPPOTrainer(PPOTrainer):
                     value_coef=cfg.value_coef,
                     entropy_coef=cfg.entropy_coef,
                 )
-                # CVaR term is pre-computed (constant for this update).
-                total = losses["total"] + cvar_term_const
+                # CVaR penalty is already applied to advantages, so we just use PPO total
+                total = losses["total"]
                 if not torch.isfinite(total):
                     logger.warning("cvar-ppo step %d: non-finite loss, skipping", self._step)
                     continue
