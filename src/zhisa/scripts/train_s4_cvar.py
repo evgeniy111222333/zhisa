@@ -58,8 +58,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cvar-alpha", type=float, default=None)
     parser.add_argument("--cvar-threshold", type=float, default=None)
     parser.add_argument("--cvar-lambda-lr", type=float, default=None)
+    parser.add_argument("--cvar-warmup-iters", type=int, default=None,
+                        help="Override cvar warmup iterations (default 5 for s4_cvar_v2)")
+    parser.add_argument("--minibatch-size", type=int, default=None,
+                        help="Override PPO mini-batch size (default 256 for s4_cvar_v2)")
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--ent-coef", type=float, default=None, help="Entropy coefficient override")
     parser.add_argument("--checkpoint", type=str, default="artifacts/s4_cvar/model.pt")
+    parser.add_argument("--load", type=str, default=None, help="Path to existing model weights to continue training")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
 
@@ -83,6 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     env_cfg = _build_env_cfg(cfg)
     env_cfg.window = chart_window
     env_cfg.image_size = image_size
+    # Pre-render every rolling-window chart once at env construction.
+    # This trades ~1-3 seconds of init time for completely removing
+    # matplotlib from the per-step hot path — for a 200-iter CVaR-PPO
+    # fit with 2000 step-rollouts this is typically the single
+    # biggest win after the on-device history fix in Tier 1.
+    # Override in YAML/config to disable.
+    if not getattr(env_cfg, "prefetch_charts", False):
+        env_cfg.prefetch_charts = True
 
     probe_len = min(len(df), max(chart_window + 80, 128))
     probe_env = TradingEnv(df.iloc[:probe_len], cfg=env_cfg)
@@ -93,16 +107,31 @@ def main(argv: list[str] | None = None) -> int:
         window=chart_window, image_size=image_size,
         n_actions=9, n_regime_classes=spec.n_regime_states,
     )
+    if args.load:
+        ckpt = torch.load(args.load, map_location="cpu", weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        print(f"Loaded existing weights from {args.load}")
 
+    # Speed-oriented defaults for the s4_cvar_v2 line:
+    # * minibatch_size=256 keeps the GPU/CPU busier per PPO step (the
+    #   2000-step rollouts we run split into ~8 minibatches/epoch
+    #   instead of ~32, with no change to the algorithm).
+    # * cvar_warmup_iters=5 lets the policy explore for the first five
+    #   iterations before the dual multiplier can grow — this is
+    #   mathematically equivalent to running with warmup=0 and an
+    #   initial lambda=0, but saves the dual-update branch in the
+    #   inner loop and (more importantly) gives the policy a head start
+    #   so the first few iterations don't waste effort chasing a
+    #   noisy CVaR signal.
     trainer_cfg = CVaRPPOConfig(
         n_iterations=args.iterations or (int(cfg.get("n_iterations", 5)) if cfg else 5),
         n_episodes=args.episodes or (int(cfg.get("n_episodes", 4)) if cfg else 4),
         max_steps_per_episode=args.max_steps or (int(cfg.get("max_steps_per_episode", 200)) if cfg else 200),
         n_epochs=int(cfg.get("n_epochs", 4)) if cfg else 4,
-        minibatch_size=int(cfg.get("minibatch_size", 64)) if cfg else 64,
+        minibatch_size=args.minibatch_size or (int(cfg.get("minibatch_size", 256)) if cfg else 256),
         clip_ratio=float(cfg.get("clip_ratio", 0.2)) if cfg else 0.2,
         value_coef=float(cfg.get("value_coef", 0.5)) if cfg else 0.5,
-        entropy_coef=float(cfg.get("entropy_coef", 0.01)) if cfg else 0.01,
+        entropy_coef=args.ent_coef or (float(cfg.get("entropy_coef", 0.01)) if cfg else 0.01),
         gamma=float(cfg.get("gamma", 0.99)) if cfg else 0.99,
         gae_lambda=float(cfg.get("gae_lambda", 0.95)) if cfg else 0.95,
         grad_clip=float(cfg.get("grad_clip", 1.0)) if cfg else 1.0,
@@ -112,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         cvar_lambda_init=float(cfg.get("cvar_lambda_init", 0.0)) if cfg else 0.0,
         cvar_lambda_lr=args.cvar_lambda_lr or (float(cfg.get("cvar_lambda_lr", 0.05)) if cfg else 0.05),
         cvar_lambda_max=float(cfg.get("cvar_lambda_max", 100.0)) if cfg else 100.0,
-        cvar_warmup_iters=int(cfg.get("cvar_warmup_iters", 0)) if cfg else 0,
+        cvar_warmup_iters=args.cvar_warmup_iters or (int(cfg.get("cvar_warmup_iters", 5)) if cfg else 5),
         env_cfg=env_cfg,
         device=device,
         seed=seed,

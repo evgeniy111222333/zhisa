@@ -118,7 +118,38 @@ class RegimeSupervisionBatch:
     meta: list[dict[str, Any]]
 
 
-def _forward_outcome(close: pd.Series, t: int, horizon: int) -> RegimeOutcome:
+def _forward_outcome(close: "pd.Series | np.ndarray", t: int, horizon: int) -> RegimeOutcome:
+    """Forward return / realised vol / max drawdown over ``[t+1, t+horizon]``.
+
+    Accepts either a :class:`pandas.Series` (legacy) or a 1-D
+    :class:`numpy.ndarray` (fast). When given an array, the path is
+    built in pure numpy — no ``pd.concat``, no ``Series.iloc``. The
+    returned values are bit-exactly the same as the legacy pandas
+    path (verified by ``tests/test_regime_perf.py``).
+    """
+    if isinstance(close, np.ndarray):
+        c0 = float(close[t])
+        end = min(t + 1 + horizon, len(close))
+        if end <= t + 1 or c0 <= 0 or not np.isfinite(c0):
+            return RegimeOutcome(forward_return=0.0, realized_vol=0.0, max_drawdown=0.0)
+        future = close[t + 1 : end].astype(np.float64, copy=False)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_future = np.where(future > 0, np.log(future), np.nan)
+            log_c0 = np.log(c0)
+        log_path = np.concatenate(([log_c0], log_future))
+        logret = np.diff(log_path)
+        logret = logret[np.isfinite(logret)]
+        rel = future / c0 - 1.0
+        forward_return = float(rel[-1])
+        realized_vol = float(logret.std(ddof=0)) if logret.size else 0.0
+        max_drawdown = float(rel.min()) if rel.size else 0.0
+        return RegimeOutcome(
+            forward_return=forward_return if np.isfinite(forward_return) else 0.0,
+            realized_vol=realized_vol if np.isfinite(realized_vol) else 0.0,
+            max_drawdown=min(0.0, max_drawdown) if np.isfinite(max_drawdown) else 0.0,
+        )
+
+    # Legacy pandas fallback
     c0 = float(close.iloc[t])
     future = close.iloc[t + 1 : t + horizon + 1].astype(float)
     if future.empty or c0 <= 0 or not np.isfinite(c0):
@@ -162,6 +193,11 @@ def _playbook_scores(report: RegimeReport, outcome: RegimeOutcome) -> tuple[np.n
 class RegimeSupervisionDataset(Dataset):
     """Causal regime snapshots with forward outcomes for supervised learning."""
 
+    # Set in __init__ when the in-memory cache_items path is active. The
+    # DataLoader factory uses this to pick ``num_workers=0`` (avoids IPC
+    # overhead since the dataset already memoises items in-process).
+    __fast_getitem__: bool = False
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -184,7 +220,15 @@ class RegimeSupervisionDataset(Dataset):
         start = self.cfg.min_history - 1
         stop = len(df) - self.cfg.horizon - 1
         self.indices = list(range(start, stop + 1, self.cfg.stride))
+        # Pre-extract close as a contiguous ndarray. ``_forward_outcome``
+        # has a fast numpy branch that avoids pandas iloc/concat in the
+        # hot path. The original Series is kept for any external caller.
+        self._close = np.ascontiguousarray(df["close"].to_numpy(dtype=np.float64))
+        self._close_series = df["close"].astype(float)
         self._cache: dict[int, RegimeSupervisionItem] = {}
+        # Always advertise the fast path: items are built from numpy
+        # views (with optional in-memory cache).
+        self.__fast_getitem__ = True
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -194,7 +238,7 @@ class RegimeSupervisionDataset(Dataset):
             return self._cache[idx]
         t = self.indices[idx]
         report = self.analyzer.analyze(self.df, t=t, symbol=self.cfg.symbol)
-        outcome = _forward_outcome(self.df["close"], t, self.cfg.horizon)
+        outcome = _forward_outcome(self._close, t, self.cfg.horizon)
         playbook_scores, playbook_label, best_playbook = _playbook_scores(report, outcome)
         outcome = RegimeOutcome(
             forward_return=outcome.forward_return,

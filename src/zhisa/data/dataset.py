@@ -9,9 +9,24 @@ Each sample at index ``t`` contains:
 The dataset supports the typical ``torch.utils.data.Dataset`` protocol
 and exposes a ``collate`` function that pads/batches multimodal samples
 into ``MultimodalBatch`` namedtuples.
+
+Performance design (revised):
+    * All pandas tables are converted to C-contiguous numpy arrays in
+      ``__init__`` (one-shot cost). Hot-path ``__getitem__`` uses zero-copy
+      numpy slicing and ``torch.from_numpy``.
+    * If ``cache_charts`` is true (the default in the ``precompute`` mode),
+      every chart image is rendered once during ``__init__`` and stored in
+      a single preallocated ``(N, 3, H, W)`` numpy array. This eliminates
+      matplotlib from the training hot path entirely.
+    * When ``cache_charts`` is false, charts are rendered lazily and memoized
+      in an LRU-style dict bounded by ``chart_cache_size``.
+    * The fast path is bit-exactly equivalent to the old pandas-based
+      ``__getitem__`` (verified by ``tests/test_dataset_perf.py``).
 """
 from __future__ import annotations
 
+import logging
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -29,9 +44,10 @@ from zhisa.data.labeling import (
 from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
 from zhisa.features.time import compute_time_features
 from zhisa.rendering.chart_renderer import render_chart
-from zhisa.utils.logging import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logger.addHandler(logging.NullHandler())
 
 
 @dataclass
@@ -64,14 +80,52 @@ class MultimodalBatch:
 
 
 class MarketDataset(Dataset):
-    """Multimodal trading dataset over a single OHLCV DataFrame."""
+    """Multimodal trading dataset over a single OHLCV DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        OHLCV dataframe with a ``DatetimeIndex``.
+    spec : SampleSpec, optional
+        Description of the sample shape.
+    triple_barrier_cfg : TripleBarrierConfig, optional
+        Configuration for the primary triple-barrier labelling.
+    cache_charts : bool, default ``True``
+        When true, all chart images are rendered once in ``__init__`` and
+        stored in a single ``(N, 3, H, W)`` float32 array. This trades
+        ~``len(ds) * 3 * H * W * 4`` bytes of RAM (≈ 50-150 MB on a typical
+        8k-bar run with H=W=64) for a much faster hot path. The first
+        epoch is then as fast as every subsequent one.
+    precompute : bool, default ``True``
+        When true (the default), all pandas tables are converted to numpy
+        arrays in ``__init__`` so that ``__getitem__`` does not touch
+        pandas at all. This is the recommended setting; it is exposed
+        only for debugging/legacy-compat.
+    chart_cache_size : int, default ``0``
+        When ``cache_charts`` is false, this bounds the lazy chart cache
+        to the last N entries (LRU). ``0`` means unbounded (legacy).
+
+    Notes
+    -----
+    When ``cache_charts=True`` and ``precompute=True`` (the default), the
+    class sets the marker attribute ``__fast_getitem__ = True`` so that
+    :func:`zhisa.training.dataloader_factory.build_dataloader` will pick
+    ``num_workers=0`` by default. With precomputed numpy views, the IPC
+    overhead of multiple workers is larger than the work per item.
+    """
+
+    # Set by __init__ when the fast path is active. Used by the
+    # DataLoader factory to pick num_workers=0 by default.
+    __fast_getitem__: bool = False
 
     def __init__(
         self,
         df: pd.DataFrame,
         spec: Optional[SampleSpec] = None,
         triple_barrier_cfg: Optional[TripleBarrierConfig] = None,
-        cache_charts: bool = False,
+        cache_charts: bool = True,
+        precompute: bool = True,
+        chart_cache_size: int = 0,
     ) -> None:
         spec = spec or SampleSpec()
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -81,15 +135,18 @@ class MarketDataset(Dataset):
         self.df = df
         self.spec = spec
         self.tb_cfg = triple_barrier_cfg or TripleBarrierConfig()
+        self._cache_charts = bool(cache_charts)
+        self._precompute = bool(precompute)
+        self._chart_cache_size = int(chart_cache_size)
 
         logger.info(f"MarketDataset Init: Processing {len(df)} bars. Step 1/5: Computing OHLCV features...")
-        self._features = compute_ohlcv_features(
+        self._features_df = compute_ohlcv_features(
             df, include_volume=spec.include_volume, include_indicators=spec.include_indicators
         )
-        
+
         logger.info("MarketDataset Init: Step 2/5: Computing Time embeddings...")
-        self._time_features = compute_time_features(df)
-        
+        self._time_features_df = compute_time_features(df)
+
         # Primary triple-barrier at smallest horizon; use horizon 16 by default
         primary = spec.horizons[len(spec.horizons) // 2] if spec.horizons else 16
         self._tb_cfg_primary = TripleBarrierConfig(
@@ -98,60 +155,195 @@ class MarketDataset(Dataset):
             max_holding=primary,
             atr_window=self.tb_cfg.atr_window,
         )
-        
+
         logger.info("MarketDataset Init: Step 3/5: Computing Triple Barrier Labels (Returns/Directions)...")
-        self._tb = triple_barrier(df, self._tb_cfg_primary)
-        
+        self._tb_df = triple_barrier(df, self._tb_cfg_primary)
+
         logger.info("MarketDataset Init: Step 4/5: Computing Realized Volatility...")
-        self._vol = realized_volatility(df, horizon=primary)
-        
+        self._vol_series = realized_volatility(df, horizon=primary)
+
         logger.info("MarketDataset Init: Step 5/5: Computing HMM Regime Labels (Macro States)...")
-        self._regime = hmm_regime_labels(
+        self._regime_series = hmm_regime_labels(
             df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=True
         )
 
+        # ---- Effective length (mirrors the original __len__ logic) ----
+        self._horizon_max = max(self.spec.horizons) if self.spec.horizons else 0
+        self._length = max(0, len(self.df) - self.spec.chart_window - self._horizon_max - 1)
+
+        # ---- Hot-path numpy views ----
+        if self._precompute:
+            self._features_arr = np.ascontiguousarray(
+                self._features_df.to_numpy(dtype=np.float32)
+            )
+            self._time_features_arr = np.ascontiguousarray(
+                self._time_features_df.to_numpy(dtype=np.float32)
+            )
+            self._tb_label_arr = np.ascontiguousarray(
+                self._tb_df["label"].to_numpy(dtype=np.int64)
+            )
+            self._tb_ret_arr = np.ascontiguousarray(
+                self._tb_df["ret"].to_numpy(dtype=np.float32)
+            )
+            self._vol_arr = np.ascontiguousarray(
+                self._vol_series.to_numpy(dtype=np.float32)
+            )
+            self._regime_arr = np.ascontiguousarray(
+                self._regime_series.to_numpy(dtype=np.int64)
+            )
+        else:
+            # Legacy views: still keep DataFrame references for debug/tests.
+            self._features_arr = None
+            self._time_features_arr = None
+            self._tb_label_arr = None
+            self._tb_ret_arr = None
+            self._vol_arr = None
+            self._regime_arr = None
+
+        # ---- Chart cache (preallocated when cache_charts is true) ----
+        if self._cache_charts:
+            N = self._length
+            H = W = self.spec.image_size
+            self._chart_arr = np.empty((N, 3, H, W), dtype=np.float32)
+            if N > 0:
+                logger.info(
+                    f"MarketDataset Init: Pre-rendering {N} chart windows "
+                    f"({3*H*W*N/1024/1024:.1f} MB)..."
+                )
+                self._precompute_charts()
+        else:
+            self._chart_arr = None
+            if self._chart_cache_size > 0:
+                self._chart_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
+            else:
+                self._chart_cache = {}
+
+        # Advertise the fast path to the dataloader factory.
+        self.__fast_getitem__ = bool(self._cache_charts and self._precompute)
+
         logger.info("MarketDataset Init: All tables processed and ready for DataLoader!")
-        self._cache_charts = cache_charts
-        self._chart_cache: dict[int, torch.Tensor] = {}
 
-    def __len__(self) -> int:
-        # Leave room for the largest horizon
-        horizon_max = max(self.spec.horizons) if self.spec.horizons else 0
-        return max(0, len(self.df) - self.spec.chart_window - horizon_max - 1)
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+    def _precompute_charts(self) -> None:
+        """Render every unique chart window once into ``self._chart_arr``."""
+        N = self._length
+        W = self.spec.chart_window
+        df = self.df
+        import time
+        start_time = time.time()
+        # Reuse the existing render_chart entry point for bit-exactness.
+        # The cost is O(N * W) matplotlib calls; we do it once at init.
+        for t in range(N):
+            if t > 0 and t % 50000 == 0:
+                elapsed = time.time() - start_time
+                logger.info(f"MarketDataset Init: Rendered {t}/{N} charts ({t/N*100:.1f}%) in {elapsed:.1f}s...")
+            window_df = df.iloc[t : t + W]
+            img = render_chart(window_df, size=self.spec.image_size)
+            # img is a (3, H, W) float32 tensor
+            if isinstance(img, torch.Tensor):
+                arr = img.detach().cpu().numpy()
+            else:
+                arr = np.asarray(img, dtype=np.float32)
+            # Defensive: ensure correct shape/dtype
+            if arr.shape != (3, self.spec.image_size, self.spec.image_size):
+                arr = arr.reshape(3, self.spec.image_size, self.spec.image_size)
+            self._chart_arr[t] = arr.astype(np.float32, copy=False)
+        
+        total_time = time.time() - start_time
+        logger.info(f"MarketDataset Init: Successfully rendered all {N} charts in {total_time:.1f}s!")
 
-    def _chart(self, t: int) -> torch.Tensor:
-        if self._cache_charts and t in self._chart_cache:
-            return self._chart_cache[t]
+    def _get_chart(self, t: int) -> torch.Tensor:
+        """Return the chart tensor for sample ``t`` (precomputed or cached)."""
+        if self._chart_arr is not None:
+            return torch.from_numpy(self._chart_arr[t])
+        # Lazy / LRU path
+        cache = self._chart_cache
+        if t in cache:
+            if self._chart_cache_size > 0:
+                cache.move_to_end(t)
+            return cache[t]
         start = t
         end = t + self.spec.chart_window
         window_df = self.df.iloc[start:end]
         img = render_chart(window_df, size=self.spec.image_size)
-        if self._cache_charts:
-            self._chart_cache[t] = img
+        if self._chart_cache_size > 0:
+            cache[t] = img
+            cache.move_to_end(t)
+            if len(cache) > self._chart_cache_size:
+                cache.popitem(last=False)
+        else:
+            cache[t] = img
         return img
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    def __len__(self) -> int:
+        return self._length
+
+    def _features_window(self, start: int, end: int) -> np.ndarray:
+        if self._features_arr is not None:
+            return self._features_arr[start:end]
+        return self._features_df.iloc[start:end].to_numpy(dtype=np.float32)
+
+    def _history_window(self, t: int, end: int) -> np.ndarray:
+        hist_start = max(0, t - 256)
+        if self._features_arr is not None:
+            return self._features_arr[hist_start:end]
+        return self._features_df.iloc[hist_start:end].to_numpy(dtype=np.float32)
+
+    def _ctx_row(self, primary_idx: int) -> np.ndarray:
+        if self._time_features_arr is not None:
+            return self._time_features_arr[primary_idx]
+        return self._time_features_df.iloc[primary_idx].to_numpy(dtype=np.float32)
+
+    def _label_dir(self, primary_idx: int) -> int:
+        if self._tb_label_arr is not None:
+            return int(self._tb_label_arr[primary_idx])
+        return int(self._tb_df["label"].iloc[primary_idx])
+
+    def _label_ret(self, primary_idx: int) -> float:
+        if self._tb_ret_arr is not None:
+            return float(self._tb_ret_arr[primary_idx])
+        return float(self._tb_df["ret"].iloc[primary_idx])
+
+    def _label_vol(self, primary_idx: int) -> float:
+        if self._vol_arr is not None:
+            v = float(self._vol_arr[primary_idx])
+        else:
+            v = float(self._vol_series.iloc[primary_idx])
+        if np.isnan(v):
+            return 0.0
+        return v
+
+    def _label_regime(self, primary_idx: int) -> int:
+        if self._regime_arr is not None:
+            return int(self._regime_arr[primary_idx])
+        return int(self._regime_series.iloc[primary_idx])
 
     def __getitem__(self, t: int) -> dict:
         spec = self.spec
         start = t
         end = t + spec.chart_window
-        feature_window = self._features.iloc[start:end].to_numpy(dtype=np.float32)
-        hist_start = max(0, t - 256)
-        history_window = self._features.iloc[hist_start:end].to_numpy(dtype=np.float32)
+        primary_idx = end - 1
 
+        feature_window = self._features_window(start, end)
+        history_window = self._history_window(t, end)
         # Numeric features only (NaN -> 0, robust fill). The cyclic time
         # embeddings are placed in ``context`` (last bar) so the dataset's
         # ``numeric`` shape matches the env's contract — and the policy's
         # ``in_numeric_features`` default (32) is wire-compatible.
         num = normalize_feature_window(feature_window, history_window)
 
-        chart = self._chart(t)
-        ctx = self._time_features.iloc[end - 1].to_numpy(dtype=np.float32)
-        primary_idx = end - 1
-        lbl_dir = int(self._tb["label"].iloc[primary_idx])
-        lbl_ret = float(self._tb["ret"].iloc[primary_idx])
-        lbl_vol = float(self._vol.iloc[primary_idx]) if not np.isnan(self._vol.iloc[primary_idx]) else 0.0
+        chart = self._get_chart(t)
+        ctx = self._ctx_row(primary_idx)
+        lbl_dir = self._label_dir(primary_idx)
+        lbl_ret = self._label_ret(primary_idx)
+        lbl_vol = self._label_vol(primary_idx)
         lbl_risk = max(-lbl_ret, 0.0) + max(lbl_vol, 0.0)
-        lbl_regime = int(self._regime.iloc[primary_idx])
+        lbl_regime = self._label_regime(primary_idx)
 
         mask = np.ones(spec.chart_window, dtype=bool)
         return {

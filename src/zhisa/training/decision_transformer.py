@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader
 
 from zhisa.data.trajectory import Trajectory, TrajectoryWindowDataset
 from zhisa.models.policy import PolicyConfig, PolicyNetwork
+from zhisa.training.dataloader_factory import build_dataloader
 from zhisa.utils.logging import get_logger
 from zhisa.utils.seeding import set_seed
 
@@ -256,7 +257,7 @@ class DecisionTransformerTrainer:
     def _eval_loss(self, dataset: TrajectoryWindowDataset) -> float:
         if len(dataset) == 0:
             return float("nan")
-        loader = DataLoader(dataset, batch_size=self.cfg.batch_size, shuffle=False)
+        loader = build_dataloader(dataset, batch_size=self.cfg.batch_size, shuffle=False)
         losses: list[float] = []
         for batch in loader:
             batch = self._move_batch(batch)
@@ -282,7 +283,7 @@ class DecisionTransformerTrainer:
         if len(dataset) == 0:
             raise ValueError("Cannot fit DT on an empty dataset")
         set_seed(self.cfg.seed)
-        loader = DataLoader(
+        loader = build_dataloader(
             dataset, batch_size=self.cfg.batch_size, shuffle=True, drop_last=False
         )
         result = DTTrainResult()

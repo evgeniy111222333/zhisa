@@ -41,6 +41,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from zhisa.data.dataset import MarketDataset, SampleSpec
+from zhisa.training.dataloader_factory import build_dataloader
 
 
 def _batched_collate(batch: list[dict]) -> dict:
@@ -288,10 +289,9 @@ class BehavioralCloningTrainer:
         spec = spec or SampleSpec()
         ds, actions = _make_dataset(df, spec, expert)
         labeled = _LabeledMarketDataset(ds, actions)
-        loader = DataLoader(
+        loader = build_dataloader(
             labeled, batch_size=self.cfg.batch_size, shuffle=True,
             num_workers=0, collate_fn=_batched_collate, drop_last=True,
-            pin_memory=self.cfg.device.startswith("cuda"),
         )
         history: list[dict] = []
         timer = Timer()
@@ -484,7 +484,7 @@ class DAggerTrainer:
         """The static BC dataset (computed once)."""
         ds, actions = _make_dataset(df, spec, self.expert)
         labeled = _LabeledMarketDataset(ds, actions)
-        return DataLoader(
+        return build_dataloader(
             labeled, batch_size=self.cfg.batch_size, shuffle=True,
             num_workers=0, collate_fn=_batched_collate, drop_last=True,
         ), ds, labeled
@@ -566,10 +566,9 @@ class DAggerTrainer:
             agg_ds = _AggregatedPairs(agg_charts, agg_nums, agg_ctxs, agg_acts)
             # Concat-loader: chain static and aggregated.
             combined = torch.utils.data.ConcatDataset([labeled, agg_ds])
-            combined_loader = DataLoader(
+            combined_loader = build_dataloader(
                 combined, batch_size=self.cfg.batch_size, shuffle=True,
                 num_workers=0, collate_fn=_batched_collate, drop_last=True,
-                pin_memory=self.cfg.device.startswith("cuda"),
             )
             timer.start()
             # Refresh the BC trainer's optimiser (so the BC loss's

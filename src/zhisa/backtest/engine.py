@@ -83,8 +83,15 @@ def run_backtest(
     equity_floor = 1e-12
     equity_ceiling_mult = 100.0  # 100x initial equity as a sanity cap
     init_equity = float(env._equity)
+    
+    total_steps = len(df) - env._t
+    step_count = 0
+    
     while not done:
         action = _select_action(policy, obs, env)
+        step_count += 1
+        if step_count % 5000 == 0:
+            print(f"Backtest progress: {step_count}/{total_steps} steps ({(step_count/total_steps)*100:.1f}%)", flush=True)
         obs, r, terminated, truncated, info = env.step(action)
         _observe_step(policy, obs, action, float(r), info, env)
         info_hist.append(info)

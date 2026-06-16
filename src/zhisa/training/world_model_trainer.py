@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from zhisa.data.trajectory import Trajectory, TrajectoryWindowDataset, compute_returns_to_go
 from zhisa.models.world_model import WorldModel
+from zhisa.training.dataloader_factory import build_dataloader
 from zhisa.utils.logging import get_logger
 from zhisa.utils.seeding import set_seed
 
@@ -40,7 +41,16 @@ class WorldModelDataset(Dataset):
     A trajectory of length ``T`` yields ``T`` transitions (with the
     final transition's ``done`` set to True). All inputs are
     pre-computed ``state_emb`` (frozen encoder output).
+
+    Performance
+    -----------
+    All transitions are flattened into a list of dicts in ``__init__``;
+    ``__getitem__`` is a pure dict access + ``torch.from_numpy``, which
+    is already very fast. The class advertises ``__fast_getitem__ = True``
+    so the DataLoader factory picks ``num_workers=0``.
     """
+
+    __fast_getitem__: bool = True
 
     def __init__(self, trajectories: list[Trajectory]) -> None:
         self._items: list[dict] = []
@@ -181,7 +191,7 @@ class WorldModelTrainer:
     def _eval(self, dataset: WorldModelDataset) -> dict:
         if len(dataset) == 0:
             return {"state_mse": float("nan"), "reward_mse": float("nan"), "done_bce": float("nan")}
-        loader = DataLoader(dataset, batch_size=self.cfg.batch_size, shuffle=False)
+        loader = build_dataloader(dataset, batch_size=self.cfg.batch_size, shuffle=False)
         ss, rs, ds, n = 0.0, 0.0, 0.0, 0
         for batch in loader:
             out = self._step(batch)
@@ -203,7 +213,7 @@ class WorldModelTrainer:
         if len(dataset) == 0:
             raise ValueError("Cannot fit WorldModel on an empty dataset")
         set_seed(self.cfg.seed)
-        loader = DataLoader(dataset, batch_size=self.cfg.batch_size, shuffle=True)
+        loader = build_dataloader(dataset, batch_size=self.cfg.batch_size, shuffle=True)
         result = WorldModelTrainResult()
         for epoch in range(self.cfg.epochs):
             agg = {"loss": [], "state_mse": [], "reward_mse": [], "done_bce": []}

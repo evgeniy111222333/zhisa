@@ -150,8 +150,16 @@ def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
         return np.full((size, size, 3), 0.5, dtype=np.float32)
     n = len(df)
     rgb = np.full((size, size, 3), 0.05, dtype=np.float32)
-    lo = float(df["low"].min())
-    hi = float(df["high"].max())
+    
+    # OPTIMIZATION: Extract arrays ONCE to avoid 40 million Pandas .iloc calls
+    o_arr = df["open"].to_numpy(dtype=np.float64)
+    c_arr = df["close"].to_numpy(dtype=np.float64)
+    h_arr = df["high"].to_numpy(dtype=np.float64)
+    l_arr = df["low"].to_numpy(dtype=np.float64)
+    v_arr = df["volume"].to_numpy(dtype=np.float64)
+    
+    lo = float(l_arr.min())
+    hi = float(h_arr.max())
     rng = max(hi - lo, 1e-9)
     # Map bars to x columns
     xs = (np.arange(n) * (size - 1) / max(n - 1, 1)).astype(int)
@@ -160,10 +168,7 @@ def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
     # Candles
     for i in range(n):
         x = xs[i]
-        o = float(df["open"].iloc[i])
-        c = float(df["close"].iloc[i])
-        h = float(df["high"].iloc[i])
-        l = float(df["low"].iloc[i])
+        o, c, h, l = float(o_arr[i]), float(c_arr[i]), float(h_arr[i]), float(l_arr[i])
         y_o = price_h - int((o - lo) / rng * (price_h - 2))
         y_c = price_h - int((c - lo) / rng * (price_h - 2))
         y_h = price_h - int((h - lo) / rng * (price_h - 2))
@@ -176,14 +181,12 @@ def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
         for y in range(min(y_o, y_c), max(y_o, y_c) + 1):
             rgb[y, x] = color
     # Volume bars on bottom 25%
-    vol = df["volume"].to_numpy(dtype=np.float64)
-    vmax = max(vol.max(), 1e-9)
+    vmax = max(v_arr.max(), 1e-9)
     for i in range(n):
         x = xs[i]
-        v = vol[i] / vmax
+        v = v_arr[i] / vmax
         bar_h = int(v * (size - price_h - 1))
-        o = float(df["open"].iloc[i])
-        c = float(df["close"].iloc[i])
+        o, c = float(o_arr[i]), float(c_arr[i])
         color = np.array(_GREEN if c >= o else _RED, dtype=np.float32)
         for y in range(size - bar_h, size):
             rgb[y, x] = color
@@ -192,13 +195,23 @@ def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
                    (30, np.array([1.0, 0.67, 0.20], dtype=np.float32))):
         if n < p:
             continue
-        sma = df["close"].rolling(p, min_periods=1).mean().to_numpy()
+        # Pure numpy SMA to avoid Pandas DataFrame creation overhead
+        kernel = np.ones(p) / p
+        sma = np.convolve(c_arr, kernel, mode='valid')
+        # Pad beginning to match min_periods=1 behavior
+        pad_len = n - len(sma)
+        if pad_len > 0:
+            pad = np.cumsum(c_arr[:pad_len]) / np.arange(1, pad_len + 1)
+            sma = np.concatenate((pad, sma))
+            
         ys = price_h - ((sma - lo) / rng * (price_h - 2)).astype(int)
         for i in range(n - 1):
             cv = np.clip(ys[i], 0, price_h - 1)
             nv = np.clip(ys[i + 1], 0, price_h - 1)
             x1, x2 = xs[i], xs[i + 1]
-            _draw_line(rgb, x1, cv, x2, nv, col)
+            for x in range(x1, x2 + 1):
+                y = int(cv + (nv - cv) * (x - x1) / max(x2 - x1, 1))
+                rgb[y, x] = col
     return rgb
 
 

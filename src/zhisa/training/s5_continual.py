@@ -45,6 +45,7 @@ from torch.utils.data import DataLoader
 
 from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.data.synthetic import MarketConfig, generate_market
+from zhisa.training.dataloader_factory import build_dataloader
 from zhisa.utils.logging import get_logger
 from zhisa.utils.seeding import set_seed
 
@@ -588,7 +589,7 @@ class OnlineContinualTrainer:
             return
         if len(ds) == 0:
             return
-        loader = DataLoader(
+        loader = build_dataloader(
             ds, batch_size=min(4, len(ds)),
             shuffle=True, collate_fn=lambda batch: {
                 "chart": torch.stack([b["chart"] for b in batch]),

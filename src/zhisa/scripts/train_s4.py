@@ -56,8 +56,10 @@ def _build_ppo_cfg(cfg, args, env_cfg: EnvConfig) -> PPOConfig:
 
     optim_overrides = opt("optim", {}) or {}
     return PPOConfig(
+        n_iterations=int(args.n_iterations if args.n_iterations is not None
+                         else opt("n_iterations", 100)),
         n_episodes=int(args.n_episodes if args.n_episodes is not None
-                       else opt("n_episodes", 4)),
+                       else opt("n_episodes", 10)),
         max_steps_per_episode=int(args.max_steps if args.max_steps is not None
                                   else opt("max_steps_per_episode", 200)),
         n_epochs=int(opt("n_epochs", 4)),
@@ -84,6 +86,7 @@ def _build_ppo_cfg(cfg, args, env_cfg: EnvConfig) -> PPOConfig:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train S4 PPO policy.")
     parser.add_argument("--config", type=str, default="configs/s4_rl.yaml")
+    parser.add_argument("--n-iterations", type=int, default=None)
     parser.add_argument("--n-episodes", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--bars", type=int, default=None)
@@ -137,12 +140,19 @@ def main(argv: list[str] | None = None) -> int:
 
     ppo_cfg = _build_ppo_cfg(cfg, args, env_cfg)
 
+    import time
+    start_time = time.time()
+    
     trainer = PPOTrainer(model, ppo_cfg)
     result = trainer.fit(df)
     Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
     trainer.save(args.checkpoint)
 
-    print("S4 PPO training complete.")
+    total_time = time.time() - start_time
+    hours, rem = divmod(total_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    
+    print(f"S4 PPO training complete in {int(hours)}h {int(minutes)}m {int(seconds)}s.")
     history = result["history"]
     if history:
         last = history[-1]

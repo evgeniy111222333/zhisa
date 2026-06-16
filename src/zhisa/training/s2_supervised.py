@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 
 from zhisa.data.dataset import MarketDataset, multimodal_collate
 from zhisa.models.policy import PolicyConfig, PolicyNetwork
+from zhisa.training.dataloader_factory import build_dataloader
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig, build_optimizer, build_scheduler
 from zhisa.utils.logging import get_logger
@@ -77,7 +78,7 @@ class SupervisedTrainer:
 
     def fit(self, train_ds: MarketDataset, val_ds: Optional[MarketDataset] = None) -> dict:
         cfg = self.cfg
-        train_loader = DataLoader(
+        train_loader = build_dataloader(
             train_ds, batch_size=cfg.batch_size, shuffle=True,
             num_workers=cfg.num_workers, collate_fn=multimodal_collate, drop_last=True,
         )
@@ -127,7 +128,7 @@ class SupervisedTrainer:
 
     @torch.no_grad()
     def evaluate(self, ds: MarketDataset) -> dict:
-        loader = DataLoader(
+        loader = build_dataloader(
             ds, batch_size=self.cfg.batch_size, shuffle=False,
             num_workers=self.cfg.num_workers, collate_fn=multimodal_collate,
         )

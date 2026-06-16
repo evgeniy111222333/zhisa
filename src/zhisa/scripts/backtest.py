@@ -62,7 +62,7 @@ class TorchModelPolicy:
         self.model = model
         self.device = device
         self.model.eval()
-        self.model.to(device)
+        self.model.to(self.device)
 
     def logits(self, obs) -> torch.Tensor:
         with torch.no_grad():

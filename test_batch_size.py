@@ -31,8 +31,8 @@ def main():
     spec = SampleSpec(chart_window=32, feature_window=32, image_size=32)
     ds = MarketDataset(df, spec=spec, cache_charts=True)
 
-    n_feat = ds._features.shape[1]
-    n_ctx = ds._time_features.shape[1]
+    n_feat = ds._features_df.shape[1]
+    n_ctx = ds._time_features_df.shape[1]
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")

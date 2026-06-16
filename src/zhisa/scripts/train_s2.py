@@ -63,10 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     ds = MarketDataset(df, spec=spec, cache_charts=args.cache_charts)
 
     # Model
-    n_feat = ds._features.shape[1]
+    spec = ds.spec
+    n_feat = ds._features_df.shape[1]
+    n_ctx = ds._time_features_df.shape[1]
     model = build_default_policy(
         in_numeric_features=n_feat,
-        in_context_features=ds._time_features.shape[1],
+        in_context_features=n_ctx,
         window=spec.chart_window,
         image_size=spec.image_size,
         n_actions=9,

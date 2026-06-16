@@ -22,6 +22,7 @@ from zhisa.regime.dataset import (
     regime_supervision_collate,
 )
 from zhisa.regime.encoder import RegimeEncoder
+from zhisa.training.dataloader_factory import build_dataloader
 from zhisa.training.optim import OptimConfig, build_optimizer, build_scheduler
 from zhisa.training.regime_supervised import RegimeEncoderLoss, RegimeLossWeights, _move_batch
 from zhisa.utils.logging import get_logger
@@ -140,7 +141,7 @@ class RegimeContrastiveTrainer:
         val_ds: Optional[RegimeSupervisionDataset] = None,
     ) -> dict:
         torch.manual_seed(int(self.cfg.seed))
-        loader = DataLoader(
+        loader = build_dataloader(
             train_ds,
             batch_size=self.cfg.batch_size,
             shuffle=True,
@@ -183,7 +184,7 @@ class RegimeContrastiveTrainer:
 
     @torch.no_grad()
     def evaluate(self, ds: RegimeSupervisionDataset) -> dict:
-        loader = DataLoader(
+        loader = build_dataloader(
             ds,
             batch_size=self.cfg.batch_size,
             shuffle=False,

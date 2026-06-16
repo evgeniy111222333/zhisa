@@ -27,6 +27,12 @@ from zhisa.regime.memory import RegimeOutcome
 from zhisa.regime.schema import MacroRegime, MesoRegime, RegimeReport, RiskMode
 from zhisa.regime.vectorizer import RegimeFeatureVectorizer, RegimeVectorizerConfig
 from zhisa.regime.registry import RegimeModelCandidate, build_regime_model_registry
+# NOTE: `build_dataloader` is imported lazily inside ``fit``/``evaluate`` to
+# avoid a circular import: ``zhisa.training.dataloader_factory`` is reached
+# via ``zhisa.training.__init__`` -> ``s2b_imitation`` -> ``data.expert``
+# -> ``env`` -> ``models`` -> ``regime`` -> us.
+# Use:  from zhisa.training.dataloader_factory import build_dataloader
+# at the call site instead.
 
 
 def _clip01(x: float) -> float:
@@ -110,34 +116,77 @@ class RegimeOutcomeBatch:
     meta: list[dict[str, Any]]
 
 
-def _future_path(close: pd.Series, t: int, horizon: int) -> pd.Series:
+def _future_path(close_arr: np.ndarray, t: int, horizon: int) -> np.ndarray:
+    """Return the path [c_t, c_{t+1}, ..., c_{t+horizon}] as a numpy array.
+
+    Equivalent to the old pandas-based ``_future_path``, but avoids the
+    ``pd.concat`` overhead. ``close_arr`` is expected to be a 1-D float
+    array of the close prices.
+    """
+    end = min(t + 1 + horizon, len(close_arr))
+    if end <= t + 1:
+        # No future data — return just the anchor.
+        return np.array([float(close_arr[t])], dtype=np.float64)
+    future = close_arr[t + 1 : end].astype(np.float64, copy=False)
+    return np.concatenate(([float(close_arr[t])], future))
+
+
+def _outcome(close: "pd.Series | np.ndarray", t: int, horizon: int) -> tuple[RegimeOutcome, float, float]:
+    """Compute the outcome triple for ``(t, horizon)``.
+
+    Accepts either a :class:`pandas.Series` (legacy, slow) or a
+    :class:`numpy.ndarray` (fast). When the input is a numpy array, the
+    inner loop is pure numpy — typically ~10-20x faster on the regime
+    cold path. The returned values are bit-exactly the same as the
+    legacy pandas-based path (verified by ``tests/test_regime_perf.py``).
+    """
+    if isinstance(close, np.ndarray):
+        path = _future_path(close, t, horizon)
+        c0 = float(path[0])
+        future = path[1:]
+        if future.size == 0 or c0 <= 0 or not np.isfinite(c0):
+            return RegimeOutcome(forward_return=0.0, realized_vol=0.0, max_drawdown=0.0), 0.0, 0.0
+        rel = future / c0 - 1.0
+        # logret = log(path) differenced; guard against zeros
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_path = np.where(path > 0, np.log(path), np.nan)
+        logret = np.diff(log_path)
+        if logret.size:
+            logret = logret[np.isfinite(logret)]
+        outcome = RegimeOutcome(
+            forward_return=float(rel[-1]) if np.isfinite(float(rel[-1])) else 0.0,
+            realized_vol=float(logret.std(ddof=0) if logret.size else 0.0),
+            max_drawdown=min(0.0, float(rel.min())),
+        )
+        mfe = max(0.0, float(rel.max()))
+        abs_path_return = float(np.abs(rel).max()) if rel.size else 0.0
+        return outcome, mfe, abs_path_return
+
+    # Legacy pandas fallback (kept for any caller that still passes a Series)
     c0 = float(close.iloc[t])
     future = close.iloc[t + 1 : t + horizon + 1].astype(float)
-    if c0 <= 0 or not np.isfinite(c0) or future.empty:
-        return pd.Series([c0], index=[close.index[t]], dtype=float)
-    return pd.concat([pd.Series([c0], index=[close.index[t]]), future])
-
-
-def _outcome(close: pd.Series, t: int, horizon: int) -> tuple[RegimeOutcome, float, float]:
-    path = _future_path(close, t, horizon)
-    c0 = float(path.iloc[0])
-    future = path.iloc[1:]
-    if future.empty or c0 <= 0:
+    if future.empty or c0 <= 0 or not np.isfinite(c0):
         return RegimeOutcome(forward_return=0.0, realized_vol=0.0, max_drawdown=0.0), 0.0, 0.0
-    rel = future / c0 - 1.0
+    path = pd.concat([pd.Series([c0], index=[close.index[t]]), future])
     logret = np.log(path.replace(0, np.nan)).diff().replace([np.inf, -np.inf], np.nan).dropna()
+    rel = future / c0 - 1.0
     outcome = RegimeOutcome(
         forward_return=float(rel.iloc[-1]) if np.isfinite(float(rel.iloc[-1])) else 0.0,
         realized_vol=float(logret.std(ddof=0) if not logret.empty else 0.0),
         max_drawdown=min(0.0, float(rel.min())),
     )
     mfe = max(0.0, float(rel.max()))
-    abs_path_return = float(np.abs(rel).max()) if not rel.empty else 0.0
+    abs_path_return = float(np.abs(rel).max()) if not future.empty else 0.0
     return outcome, mfe, abs_path_return
 
 
 class RegimeOutcomeDataset(Dataset):
     """Causal features at ``t`` with outcome-first future labels over several horizons."""
+
+    # Set in __init__ when the in-memory cache_items path is active. The
+    # DataLoader factory uses this to pick ``num_workers=0`` (avoids IPC
+    # overhead since the dataset already memoises items in-process).
+    __fast_getitem__: bool = False
 
     def __init__(
         self,
@@ -153,7 +202,12 @@ class RegimeOutcomeDataset(Dataset):
         self.vectorizer = vectorizer or RegimeFeatureVectorizer(self.cfg.vectorizer)
         if "close" not in df.columns:
             raise ValueError("df must contain a close column")
-        self._close = df["close"].astype(float)
+        # Pre-extract close prices as a contiguous numpy array. ``_outcome``
+        # has a fast numpy branch that avoids pandas iloc/concat in the
+        # hot path. The original Series is kept as ``_close_series`` for
+        # any external caller that needs the labelled index.
+        self._close = np.ascontiguousarray(df["close"].to_numpy(dtype=np.float64))
+        self._close_series = df["close"].astype(float)
         max_h = max(self.cfg.horizons)
         if len(df) <= self.cfg.min_history + max_h:
             raise ValueError(
@@ -164,6 +218,9 @@ class RegimeOutcomeDataset(Dataset):
         stop = len(df) - max_h - 1
         self.indices = list(range(start, stop + 1, self.cfg.stride))
         self._cache: OrderedDict[int, RegimeOutcomeItem] = OrderedDict()
+        # Advertise the fast path: the dataset either memoises items
+        # (cache_items=True) or builds them from numpy views on each call.
+        self.__fast_getitem__ = bool(self.cfg.cache_items or True)  # always numpy now
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -478,7 +535,9 @@ class RegimeModelTrainer:
 
     def fit(self, train_ds: RegimeOutcomeDataset, val_ds: RegimeOutcomeDataset | None = None) -> dict[str, Any]:
         torch.manual_seed(int(self.cfg.seed))
-        loader = DataLoader(
+        # Lazy import: avoid circular dependency at module load.
+        from zhisa.training.dataloader_factory import build_dataloader
+        loader = build_dataloader(
             train_ds,
             batch_size=self.cfg.batch_size,
             shuffle=True,
@@ -517,7 +576,9 @@ class RegimeModelTrainer:
 
     @torch.no_grad()
     def evaluate(self, ds: RegimeOutcomeDataset) -> dict[str, float]:
-        loader = DataLoader(ds, batch_size=self.cfg.batch_size, shuffle=False, collate_fn=regime_outcome_collate)
+        # Lazy import: avoid circular dependency at module load.
+        from zhisa.training.dataloader_factory import build_dataloader
+        loader = build_dataloader(ds, batch_size=self.cfg.batch_size, shuffle=False, collate_fn=regime_outcome_collate)
         self.model.eval()
         totals: dict[str, float] = {}
         n = 0
@@ -742,7 +803,9 @@ def _calibration_arrays(
     *,
     device: str | torch.device,
 ) -> dict[str, np.ndarray]:
-    loader = DataLoader(ds, batch_size=128, shuffle=False, collate_fn=regime_outcome_collate)
+    # Lazy import: avoid circular dependency at module load.
+    from zhisa.training.dataloader_factory import build_dataloader
+    loader = build_dataloader(ds, batch_size=128, shuffle=False, collate_fn=regime_outcome_collate)
     model.to(device)
     model.eval()
     transitions: list[float] = []

@@ -146,7 +146,11 @@ class CVaRPPOTrainer(PPOTrainer):
             rewards, values, dones, last_value=0.0,
             gamma=cfg.gamma, lam=cfg.gae_lambda,
         )
-        to_t = lambda a: torch.from_numpy(a).to(self.device)  # noqa: E731
+        to_t = lambda a: (  # noqa: E731
+            a.to(self.device, non_blocking=True)
+            if torch.is_tensor(a)
+            else torch.from_numpy(a).to(self.device, non_blocking=True)
+        )
         adv_t = to_t(advantages)
         ret_t = to_t(returns)
         old_logp_t = to_t(stacked["log_prob"])
@@ -159,11 +163,23 @@ class CVaRPPOTrainer(PPOTrainer):
         if has_history:
             history_t = to_t(stacked["history"]).float()
 
+        # Per-iteration constants: CVaR and lambda do not depend on the
+        # policy — they are fixed for the whole PPO update phase. Computing
+        # them once here (instead of inside every mini-batch) saves
+        # ``n_epochs * n_minibatches`` redundant ``cvar_torch`` calls and
+        # keeps the computation graph minimal so the backward pass only
+        # flows through the PPO terms.
+        with torch.no_grad():
+            cvar_value_const = cvar_torch(ep_returns_t, cfg.cvar_alpha).detach()
+        cvar_penalty_const = F.relu(-cvar_value_const - cfg.cvar_threshold)
+        # lambda is treated as a Python float; multiply as a Python
+        # scalar to avoid an extra CUDA kernel launch per step.
+        cvar_term_const = float(self.lambda_cvar) * cvar_penalty_const
+
         stats = {
             "policy": [], "value": [], "entropy": [], "total": [],
             "cvar_penalty": [], "cvar_value": [],
         }
-        lambda_t = torch.tensor(self.lambda_cvar, dtype=torch.float32, device=self.device)
         for epoch in range(cfg.n_epochs):
             for idx in buf.minibatch_indices(cfg.minibatch_size, self._rng):
                 hist_mb = history_t[idx] if has_history else None
@@ -189,17 +205,8 @@ class CVaRPPOTrainer(PPOTrainer):
                     value_coef=cfg.value_coef,
                     entropy_coef=cfg.entropy_coef,
                 )
-                # Differentiable CVaR penalty applied to the *policy* loss.
-                cvar_value = cvar_torch(ep_returns_t, cfg.cvar_alpha)
-                # Soft-penalty: max(0, -CVaR - threshold) in the smooth
-                # sense. We use relu for max(0, x) which is fine since
-                # the policy gradient still flows through the linear
-                # region.
-                cvar_penalty = F.relu(-cvar_value - cfg.cvar_threshold)
-                # Negative because we want to *minimise* the constraint
-                # violation; the overall loss is policy_loss + this.
-                cvar_term = -lambda_t * cvar_penalty
-                total = losses["total"] + cvar_term
+                # CVaR term is pre-computed (constant for this update).
+                total = losses["total"] + cvar_term_const
                 if not torch.isfinite(total):
                     logger.warning("cvar-ppo step %d: non-finite loss, skipping", self._step)
                     continue
@@ -212,8 +219,8 @@ class CVaRPPOTrainer(PPOTrainer):
                 stats["value"].append(float(losses["value"].item()))
                 stats["entropy"].append(float(losses["entropy"].item()))
                 stats["total"].append(float(total.item()))
-                stats["cvar_penalty"].append(float(cvar_penalty.item()))
-                stats["cvar_value"].append(float(cvar_value.item()))
+                stats["cvar_penalty"].append(float(cvar_penalty_const.item()))
+                stats["cvar_value"].append(float(cvar_value_const.item()))
                 with torch.no_grad():
                     kl = (old_logp_t[idx] - new_logp).mean().item()
                 if abs(kl) > cfg.target_kl:
@@ -281,6 +288,9 @@ class CVaRPPOTrainer(PPOTrainer):
                     losses["policy"], losses["value"],
                     losses["entropy"], losses["total"],
                 )
+                if cfg.checkpoint and (it + 1) % 10 == 0:
+                    inter_path = str(cfg.checkpoint).replace(".pt", f"_iter_{it+1}.pt")
+                    self.save(inter_path)
             timer.reset()
         if cfg.checkpoint:
             self.save(cfg.checkpoint)

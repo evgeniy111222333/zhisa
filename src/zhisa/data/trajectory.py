@@ -142,7 +142,18 @@ class TrajectoryWindowDataset(Dataset):
     the embeddings and inject them as ``obs[i]["state_emb"]``. The
     dataset prefers ``"state_emb"`` if present, otherwise falls back
     to ``"numeric"``.
+
+    Performance
+    -----------
+    All windows are precomputed in ``__init__`` and stored as numpy
+    arrays. ``__getitem__`` is a pure dict access + ``torch.from_numpy``,
+    which is already very fast. The class advertises
+    ``__fast_getitem__ = True`` so the DataLoader factory picks
+    ``num_workers=0`` (avoids IPC overhead for the trivial work per item).
     """
+
+    # All windows are precomputed in __init__; the hot path is dict lookup.
+    __fast_getitem__: bool = True
 
     def __init__(
         self,

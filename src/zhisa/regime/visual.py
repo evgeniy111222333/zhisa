@@ -78,28 +78,63 @@ class VisualRegimeLossWeights:
 class VisualRegimeSupervisionDataset(Dataset):
     """Chart windows aligned to structured regime labels and forward outcomes."""
 
+    # Set in __init__ to advertise that the chart images are precomputed
+    # and the in-memory supervision cache is hot — used by the
+    # DataLoader factory to pick num_workers=0 by default.
+    __fast_getitem__: bool = False
+
     def __init__(self, df, cfg: Optional[VisualRegimeSupervisionConfig] = None) -> None:
         self.df = df
         self.cfg = cfg or VisualRegimeSupervisionConfig()
         self.supervision = RegimeSupervisionDataset(df, self.cfg.base)
+        # Precompute the chart for every index in the supervision dataset.
+        # This trades ~``len(supervision) * 3 * H * W * 4`` bytes of RAM
+        # for a much faster hot path. The legacy lazy path is preserved
+        # via ``cache_charts=False``.
+        N = len(self.supervision)
+        H = W = int(self.cfg.image_size)
+        if N > 0 and self.cfg.cache_charts:
+            import numpy as _np
+            self._chart_arr = _np.empty((N, 3, H, W), dtype=_np.float32)
+            for i in range(N):
+                t = int(self.supervision[i].meta["t"])
+                start = max(0, t - int(self.cfg.chart_window) + 1)
+                window = self.df.iloc[start : t + 1]
+                img = render_chart(window, size=H)
+                if isinstance(img, torch.Tensor):
+                    arr = img.detach().cpu().numpy()
+                else:
+                    import numpy as _np2
+                    arr = _np2.asarray(img, dtype=_np2.float32)
+                if arr.shape != (3, H, W):
+                    arr = arr.reshape(3, H, W)
+                self._chart_arr[i] = arr.astype(_np.float32, copy=False)
+        else:
+            self._chart_arr = None
         self._chart_cache: dict[int, torch.Tensor] = {}
+        self.__fast_getitem__ = (self._chart_arr is not None)
 
     def __len__(self) -> int:
         return len(self.supervision)
 
-    def _chart(self, t: int) -> torch.Tensor:
-        if self.cfg.cache_charts and t in self._chart_cache:
-            return self._chart_cache[t]
-        start = max(0, int(t) - int(self.cfg.chart_window) + 1)
-        window = self.df.iloc[start : int(t) + 1]
+    def _chart(self, idx: int) -> torch.Tensor:
+        if self._chart_arr is not None:
+            import torch as _torch
+            return _torch.from_numpy(self._chart_arr[idx])
+        if self.cfg.cache_charts and idx in self._chart_cache:
+            return self._chart_cache[idx]
+        item = self.supervision[idx]
+        t = int(item.meta["t"])
+        start = max(0, t - int(self.cfg.chart_window) + 1)
+        window = self.df.iloc[start : t + 1]
         chart = render_chart(window, size=int(self.cfg.image_size))
         if self.cfg.cache_charts:
-            self._chart_cache[t] = chart
+            self._chart_cache[idx] = chart
         return chart
 
     def __getitem__(self, idx: int) -> VisualRegimeSupervisionItem:
         item = self.supervision[idx]
-        chart = self._chart(int(item.meta["t"]))
+        chart = self._chart(idx)
         return VisualRegimeSupervisionItem(chart=chart, supervision=item)
 
 
