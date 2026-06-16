@@ -130,7 +130,7 @@ class CVaRPPOTrainer(PPOTrainer):
         buf: RolloutBuffer,
         ep_returns_t: torch.Tensor,
     ) -> dict:
-        """PPO update with an extra ``-lambda * CVaR`` term on the policy loss."""
+        """PPO update with CVaR constraint enforced via Advantage Penalization on tail episodes."""
         cfg = self.cfg
         if len(buf) == 0:
             return {
