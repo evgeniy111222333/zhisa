@@ -27,6 +27,7 @@ from zhisa.training.s4_rl import (
     Transition,
     compute_gae,
     ppo_loss,
+    approximate_kl,
 )
 
 
@@ -163,6 +164,13 @@ def test_ppo_loss_is_zero_when_policy_unchanged_and_advantage_zero():
     assert abs(float(loss["total"])) < 1e-6
 
 
+def test_approximate_kl_is_zero_for_same_policy_and_non_negative():
+    old = torch.log(torch.tensor([0.2, 0.4, 0.8]))
+    assert approximate_kl(old, old).item() == pytest.approx(0.0)
+    shifted = old + torch.tensor([0.1, -0.2, 0.3])
+    assert approximate_kl(old, shifted).item() >= 0.0
+
+
 def test_ppo_loss_returns_scalars():
     """All four entries must be 0-dim scalar tensors."""
     new_lp = torch.randn(8)
@@ -214,6 +222,27 @@ def test_ppo_value_loss_is_mse():
     loss = ppo_loss(new_lp, old_lp, adv, val, ret, ent,
                      value_coef=1.0, entropy_coef=0.0)
     assert abs(float(loss["value"]) - 1.0) < 1e-5
+
+
+def test_ppo_value_loss_scale_preserves_optimum_but_amplifies_gradient_scale():
+    new_lp = torch.zeros(2)
+    old_lp = torch.zeros(2)
+    adv = torch.zeros(2)
+    val = torch.tensor([0.0, 1.0])
+    ret = torch.tensor([1.0, 0.0])
+    ent = torch.zeros(2)
+    loss = ppo_loss(
+        new_lp,
+        old_lp,
+        adv,
+        val,
+        ret,
+        value_coef=1.0,
+        value_loss_scale=10.0,
+        entropy=ent,
+        entropy_coef=0.0,
+    )
+    assert abs(float(loss["value"]) - 100.0) < 1e-5
 
 
 # ---------------------------------------------------------------------------
@@ -318,14 +347,14 @@ def test_rollout_buffer_clear_empties_data():
 
 def test_ppo_trainer_runs_one_iteration(ppo_model, small_df, small_env_cfg):
     cfg = PPOConfig(
-        n_episodes=2, max_steps_per_episode=10,
+        n_iterations=1, n_episodes=2, max_steps_per_episode=10,
         n_epochs=2, minibatch_size=4,
         env_cfg=small_env_cfg, log_every=1, seed=0,
     )
     trainer = PPOTrainer(ppo_model, cfg)
     result = trainer.fit(small_df)
     assert "history" in result
-    assert len(result["history"]) == cfg.n_episodes
+    assert len(result["history"]) == cfg.n_iterations
     for h in result["history"]:
         assert "mean_return" in h
         assert "total_loss" in h
@@ -335,7 +364,7 @@ def test_ppo_trainer_runs_one_iteration(ppo_model, small_df, small_env_cfg):
 def test_ppo_trainer_writes_checkpoint(ppo_model, small_df, small_env_cfg, tmp_path):
     ckpt = tmp_path / "ppo.pt"
     cfg = PPOConfig(
-        n_episodes=1, max_steps_per_episode=5,
+        n_iterations=1, n_episodes=1, max_steps_per_episode=5,
         n_epochs=1, minibatch_size=2,
         env_cfg=small_env_cfg, log_every=1, seed=0,
         checkpoint=str(ckpt),
@@ -352,13 +381,14 @@ def test_ppo_trainer_writes_checkpoint(ppo_model, small_df, small_env_cfg, tmp_p
 def test_ppo_trainer_does_not_crash_on_short_episodes(ppo_model, small_df, small_env_cfg):
     """The trainer must handle episodes that terminate before max_steps."""
     cfg = PPOConfig(
+        n_iterations=1,
         n_episodes=3, max_steps_per_episode=500,  # very long → most end on done
         n_epochs=1, minibatch_size=4,
         env_cfg=small_env_cfg, log_every=1, seed=0,
     )
     trainer = PPOTrainer(ppo_model, cfg)
     result = trainer.fit(small_df)
-    assert len(result["history"]) == 3
+    assert len(result["history"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -386,13 +416,13 @@ def test_ppo_trainer_survives_nan_loss(monkeypatch, ppo_model, small_df, small_e
 
     monkeypatch.setattr(ppo_model, "forward", faulty_forward)
     cfg = PPOConfig(
-        n_episodes=2, max_steps_per_episode=8,
+        n_iterations=1, n_episodes=2, max_steps_per_episode=8,
         n_epochs=2, minibatch_size=4,
         env_cfg=small_env_cfg, log_every=1, seed=0,
     )
     trainer = PPOTrainer(ppo_model, cfg)
     result = trainer.fit(small_df)
-    assert len(result["history"]) == cfg.n_episodes
+    assert len(result["history"]) == cfg.n_iterations
 
 
 def test_ppo_select_action_falls_back_on_nan_logits(ppo_model):
@@ -442,7 +472,7 @@ def test_ppo_is_deterministic_under_seed(small_df, small_spec, small_env_cfg):
             window=8, image_size=8, n_actions=9, n_regime_classes=3,
         )
         cfg = PPOConfig(
-            n_episodes=2, max_steps_per_episode=8,
+            n_iterations=1, n_episodes=2, max_steps_per_episode=8,
             n_epochs=2, minibatch_size=4,
             env_cfg=small_env_cfg, log_every=1, seed=7,
         )

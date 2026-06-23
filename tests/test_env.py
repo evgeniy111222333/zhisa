@@ -60,6 +60,19 @@ def test_reward_increases_on_profit():
     assert r > r_loss
 
 
+def test_turnover_penalty_is_linear_in_executed_notional():
+    weights = RewardWeights(
+        pnl=0.0, drawdown=0.0, turnover=1.0, sharpe_bonus=0.0,
+        liquidation_penalty=0.0, slippage_penalty=0.0, survival_bonus=0.0,
+        cvar_penalty=0.0,
+    )
+    state = reset_reward_state(1.0)
+    reward, _ = compute_reward(
+        state, new_equity=1.0, new_position=0.5, turnover=0.2, weights=weights,
+    )
+    assert reward == pytest.approx(-0.2)
+
+
 def test_trading_env_reset(small_market):
     env = TradingEnv(small_market, cfg=EnvConfig(window=16, image_size=16))
     obs, info = env.reset(seed=0)
@@ -245,6 +258,32 @@ def test_episode_length_cap_truncates():
             break
     assert truncated
     assert info["exit_reason"] == "episode_length_cap"
+    assert env._position == 0.0
+    assert info["terminal_liquidation"] is True
+
+
+def test_episode_boundary_liquidation_realises_pnl_and_exit_fee(small_market):
+    env = TradingEnv(small_market, cfg=EnvConfig(
+        window=16,
+        image_size=16,
+        episode_length=1,
+        fee_bps=10.0,
+        slippage_bps_per_unit=0.0,
+        max_leverage=1.0,
+        kill_on_drawdown=False,
+        liquidate_on_episode_end=True,
+        risk_limits=RiskLimits(max_drawdown=1.0),
+    ))
+    env.reset(seed=0)
+    env.df.loc[env._t, ["open", "high", "low", "close"]] = 100.0
+    env.df.loc[env._t + 1, ["open", "high", "low", "close"]] = 110.0
+    _, _, _, truncated, info = env.step(int(DiscreteAction.LONG_100))
+    assert truncated is True
+    assert env._position == 0.0
+    assert info["terminal_liquidation"] is True
+    assert info["terminal_fee"] > 0.0
+    # 10% gross return less entry and exit fees.
+    assert 1.09 < info["equity"] < 1.10
 
 
 def test_no_barriers_means_no_force_closes(small_market):
@@ -270,6 +309,82 @@ def test_skip_holds_open_position(small_market):
     assert env._position == position_before
     assert info["position"] == position_before
     assert info["fee"] == 0.0
+
+
+def _accounting_env(small_market):
+    env = TradingEnv(small_market, cfg=EnvConfig(
+        window=16,
+        image_size=16,
+        fee_bps=0.0,
+        slippage_bps_per_unit=0.0,
+        max_leverage=1.0,
+        kill_on_drawdown=False,
+        risk_limits=RiskLimits(max_drawdown=1.0),
+    ))
+    env.reset(seed=0)
+    return env
+
+
+def test_close_realises_long_profit(small_market):
+    env = _accounting_env(small_market)
+    env.df.loc[env._t, ["open", "high", "low", "close"]] = 100.0
+    env.df.loc[env._t + 1, ["open", "high", "low", "close"]] = 110.0
+    env.df.loc[env._t + 2, ["open", "high", "low", "close"]] = 110.0
+    env.step(int(DiscreteAction.LONG_100))
+    _, _, _, _, info = env.step(int(DiscreteAction.CLOSE))
+    assert env._position == 0.0
+    assert env._equity == pytest.approx(1.10)
+    assert info["equity"] == pytest.approx(1.10)
+    assert info["exit_reason"] == "agent_close"
+
+
+def test_exit_reason_does_not_leak_into_following_steps(small_market):
+    env = _accounting_env(small_market)
+    env.step(int(DiscreteAction.LONG_100))
+    _, _, _, _, close_info = env.step(int(DiscreteAction.CLOSE))
+    _, _, _, _, next_info = env.step(int(DiscreteAction.SKIP))
+    assert close_info["exit_reason"] == "agent_close"
+    assert next_info["exit_reason"] == ""
+
+
+def test_close_realises_short_profit(small_market):
+    env = _accounting_env(small_market)
+    env.df.loc[env._t, ["open", "high", "low", "close"]] = 100.0
+    env.df.loc[env._t + 1, ["open", "high", "low", "close"]] = 90.0
+    env.df.loc[env._t + 2, ["open", "high", "low", "close"]] = 90.0
+    env.step(int(DiscreteAction.SHORT_100))
+    _, _, _, _, info = env.step(int(DiscreteAction.CLOSE))
+    assert env._position == 0.0
+    assert env._equity == pytest.approx(1.10)
+    assert info["equity"] == pytest.approx(1.10)
+
+
+def test_partial_close_realises_only_reduced_exposure(small_market):
+    env = _accounting_env(small_market)
+    env.df.loc[env._t, ["open", "high", "low", "close"]] = 100.0
+    env.df.loc[env._t + 1, ["open", "high", "low", "close"]] = 110.0
+    env.df.loc[env._t + 2, ["open", "high", "low", "close"]] = 120.0
+    env.step(int(DiscreteAction.LONG_100))
+    _, _, _, _, info = env.step(int(DiscreteAction.PARTIAL_CLOSE))
+    assert env._position == pytest.approx(0.5)
+    assert env._equity == pytest.approx(1.05)
+    assert info["equity"] == pytest.approx(1.15)
+
+
+def test_reversal_realises_old_leg_and_tracks_new_leg(small_market):
+    env = _accounting_env(small_market)
+    env.df.loc[env._t, ["open", "high", "low", "close"]] = 100.0
+    env.df.loc[env._t + 1, ["open", "high", "low", "close"]] = 110.0
+    env.df.loc[env._t + 2, ["open", "high", "low", "close"]] = 99.0
+    env.df.loc[env._t + 3, ["open", "high", "low", "close"]] = 99.0
+    env.step(int(DiscreteAction.LONG_100))
+    _, _, _, _, reversal_info = env.step(int(DiscreteAction.SHORT_100))
+    assert env._position == -1.0
+    assert env._equity == pytest.approx(1.10)
+    assert reversal_info["equity"] == pytest.approx(1.20)
+    _, _, _, _, close_info = env.step(int(DiscreteAction.CLOSE))
+    assert env._equity == pytest.approx(1.20)
+    assert close_info["equity"] == pytest.approx(1.20)
 
 
 def test_step_info_includes_risk_and_fill_diagnostics(small_market):

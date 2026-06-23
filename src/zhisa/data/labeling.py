@@ -23,6 +23,61 @@ class TripleBarrierConfig:
     atr_window: int = 14
 
 
+@dataclass
+class ForwardReturnConfig:
+    """Configuration for causal forward-return market-head targets.
+
+    This is the correct S2 direction/return contract: the direction head
+    learns the sign of future price movement, while trading-specific
+    TP/SL outcomes stay in expert/backtest code.
+    """
+
+    horizon: int = 16
+    flat_return_bps: float = 1.0
+    log_return: bool = False
+
+
+def forward_return_targets(
+    df: pd.DataFrame,
+    cfg: Optional[ForwardReturnConfig] = None,
+) -> pd.DataFrame:
+    """Compute forward-return labels for market-head supervision.
+
+    Returns a DataFrame with columns:
+        - ``label`` in {-1, 0, +1}; 0 is a deadband around no movement
+        - ``ret``: simple or log return from close[t] to close[t+horizon]
+
+    The final ``horizon`` rows cannot know their future close and are filled
+    with neutral labels/zero return. Dataset length trimming prevents those
+    trailing rows from being sampled in normal training.
+    """
+    cfg = cfg or ForwardReturnConfig()
+    if cfg.horizon < 1:
+        raise ValueError("forward return horizon must be >= 1")
+    if cfg.flat_return_bps < 0:
+        raise ValueError("flat_return_bps must be >= 0")
+    if "close" not in df.columns:
+        raise ValueError("DataFrame must contain a 'close' column")
+
+    close = df["close"].to_numpy(dtype=np.float64)
+    n = len(close)
+    ret = np.zeros(n, dtype=np.float64)
+    valid = n > cfg.horizon
+    if valid:
+        base = np.maximum(close[:-cfg.horizon], 1e-12)
+        future = close[cfg.horizon:]
+        if cfg.log_return:
+            ret[:-cfg.horizon] = np.log(np.maximum(future, 1e-12) / base)
+        else:
+            ret[:-cfg.horizon] = future / base - 1.0
+
+    threshold = float(cfg.flat_return_bps) / 10_000.0
+    label = np.zeros(n, dtype=np.int64)
+    label[ret > threshold] = 1
+    label[ret < -threshold] = -1
+    return pd.DataFrame({"label": label, "ret": ret}, index=df.index)
+
+
 def triple_barrier(
     df: pd.DataFrame,
     cfg: Optional[TripleBarrierConfig] = None,
@@ -182,41 +237,52 @@ def hmm_regime_labels(
         except ImportError:
             use_sklearn = False
 
-    last_gmm = None
-    last_mapping = None
+    if rebalance_period <= 0:
+        raise ValueError("rebalance_period must be positive")
+    if lookback < n_states:
+        raise ValueError("lookback must be at least n_states")
 
-    for t in range(lookback, n):
-        # Retrain only periodically or on the first valid step
-        if last_gmm is None or t % rebalance_period == 0:
-            window = log_ret[t - lookback:t].reshape(-1, 1)
-            if use_sklearn:
-                gmm = GaussianMixture(
-                    n_components=n_states, covariance_type="full",
-                    random_state=random_state, max_iter=15,
-                )
-                gmm.fit(window)
-                # Sort components by variance
-                variances = gmm.covariances_.flatten()
-                sorted_idx = np.argsort(variances)
-                last_mapping = {original: new_label for new_label, original in enumerate(sorted_idx)}
-                last_gmm = gmm
-            else:
-                means, lab = _gmm_numpy(window, n_states, n_iter=15, rng=rng)
-                variances = []
-                for i in range(n_states):
-                    cluster_points = window[lab == i]
-                    variances.append(np.var(cluster_points) if len(cluster_points) > 0 else 0.0)
-                sorted_idx = np.argsort(variances)
-                last_mapping = {original: new_label for new_label, original in enumerate(sorted_idx)}
-                last_gmm = means  # For fallback, just store means
-                
-        # Predict current step
-        if use_sklearn:
-            raw_label = int(last_gmm.predict(log_ret[t].reshape(1, -1))[0])
-            labels[t] = last_mapping[raw_label]
+    # Fit causally at each rebalance point, then predict the whole following
+    # block in one call. This is equivalent to one-row-at-a-time prediction,
+    # but avoids millions of tiny sklearn calls on production datasets.
+    t = lookback
+    while t < n:
+        window = log_ret[t - lookback:t].reshape(-1, 1)
+        if t % rebalance_period == 0:
+            next_rebalance = t + rebalance_period
         else:
-            dist = np.abs(last_gmm - log_ret[t])
-            raw_label = int(np.argmin(dist))
-            labels[t] = last_mapping[raw_label]
+            next_rebalance = ((t // rebalance_period) + 1) * rebalance_period
+        block_end = min(n, next_rebalance)
+        block = log_ret[t:block_end].reshape(-1, 1)
+
+        if use_sklearn:
+            gmm = GaussianMixture(
+                n_components=n_states,
+                covariance_type="full",
+                random_state=random_state,
+                max_iter=15,
+            )
+            gmm.fit(window)
+            variances = gmm.covariances_.reshape(-1)
+            raw_labels = gmm.predict(block).astype(np.int64, copy=False)
+        else:
+            means, fitted_labels = _gmm_numpy(
+                window, n_states, n_iter=15, rng=rng
+            )
+            variances = np.asarray([
+                np.var(window[fitted_labels == i])
+                if np.any(fitted_labels == i)
+                else 0.0
+                for i in range(n_states)
+            ])
+            raw_labels = np.abs(
+                block[:, None, :] - means[None, :, :]
+            ).sum(axis=2).argmin(axis=1)
+
+        sorted_idx = np.argsort(variances)
+        mapping = np.empty(n_states, dtype=np.int64)
+        mapping[sorted_idx] = np.arange(n_states, dtype=np.int64)
+        labels[t:block_end] = mapping[raw_labels]
+        t = block_end
 
     return pd.Series(labels, index=df.index, name="regime")

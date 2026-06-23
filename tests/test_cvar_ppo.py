@@ -14,6 +14,7 @@ from zhisa.training.cvar_ppo import (
     CVaRPPOConfig,
     CVaRPPOTrainer,
     _per_episode_returns,
+    _tail_loss_excess,
 )
 
 
@@ -53,6 +54,14 @@ def test_per_episode_returns_empty():
     assert out.size == 0
 
 
+def test_tail_loss_excess_counts_only_threshold_violations():
+    returns = np.array([-0.20, -0.05, 0.03], dtype=np.float32)
+
+    excess = _tail_loss_excess(returns, threshold=0.10)
+
+    np.testing.assert_allclose(excess, [0.10, 0.0, 0.0], atol=1e-6)
+
+
 def test_cvar_ppo_config_validates():
     with pytest.raises(ValueError):
         CVaRPPOConfig(cvar_alpha=0.0)
@@ -85,7 +94,7 @@ def test_cvar_ppo_lambda_increases_on_violation():
     model = _make_model(df)
     cfg = CVaRPPOConfig(
         n_iterations=2, n_episodes=2, max_steps_per_episode=20,
-        cvar_alpha=0.2, cvar_threshold=0.5,  # tight -> violations expected
+        cvar_alpha=0.2, cvar_threshold=0.0,  # any negative tail violates
         cvar_lambda_init=0.0, cvar_lambda_lr=0.5, cvar_lambda_max=10.0,
         n_epochs=1, minibatch_size=8, log_every=1, device="cpu", seed=0,
     )
@@ -165,6 +174,13 @@ def test_cvar_ppo_save_load_roundtrip(tmp_path):
     assert "model" in payload
     assert "lambda_cvar" in payload
     assert "cvar_history" in payload
+    assert payload["trainer_state"]["iteration"] == 1
+
+    restored = CVaRPPOTrainer(_make_model(df), cfg)
+    state = restored.load(str(tmp_path / "cvar_ppo.pt"))
+    assert state["iteration"] == 1
+    assert restored._best_val_score == trainer._best_val_score
+    assert restored._bad_evals == trainer._bad_evals
 
 
 def test_cvar_ppo_history_records_cvar_metric():
@@ -185,3 +201,44 @@ def test_cvar_ppo_history_records_cvar_metric():
         assert "cvar_penalty" in entry
         assert np.isfinite(entry["cvar"])
         assert entry["cvar_violation"] >= 0.0
+
+
+def test_champion_selection_prefers_return_among_feasible_policies(monkeypatch):
+    df = _make_market(n_bars=100, seed=3)
+    model = _make_model(df, window=8, image_size=8)
+    cfg = CVaRPPOConfig(
+        n_iterations=3, n_episodes=1, max_steps_per_episode=2,
+        n_epochs=1, minibatch_size=2, cvar_threshold=0.02,
+        eval_every_iterations=1, eval_episodes=1,
+        best_checkpoint="best.pt", device="cpu",
+    )
+    cfg.env_cfg = EnvConfig(
+        episode_length=2, window=8, image_size=8, random_start=True,
+    )
+    trainer = CVaRPPOTrainer(model, cfg)
+
+    rollout = {
+        "ep_returns": [0.0],
+        "ep_equity_returns": [0.0],
+        "ep_max_drawdowns": [0.0],
+    }
+    from zhisa.training.s4_rl import RolloutBuffer
+    monkeypatch.setattr(trainer, "_collect_rollout", lambda envs: (RolloutBuffer(), rollout))
+    monkeypatch.setattr(trainer, "_cvar_ppo_update", lambda buf, ret: {
+        "policy": 0.0, "value": 0.0, "entropy": 0.0, "total": 0.0,
+        "cvar_penalty": 0.0,
+    })
+    evaluations = iter([
+        {"cvar": -0.03, "mean_equity_return": 0.10},
+        {"cvar": -0.01, "mean_equity_return": 0.00},
+        {"cvar": -0.015, "mean_equity_return": 0.02},
+    ])
+    monkeypatch.setattr(trainer, "_evaluate_policy", lambda *args, **kwargs: next(evaluations))
+    saved: list[str] = []
+    monkeypatch.setattr(trainer, "save", saved.append)
+
+    result = trainer.fit(df, val_df=df)
+    assert len(result["history"]) == 3
+    assert trainer._best_val_feasible is True
+    assert trainer._best_val_score == pytest.approx(0.02)
+    assert saved == ["best.pt", "best.pt", "best.pt"]

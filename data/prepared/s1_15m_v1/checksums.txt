@@ -1,0 +1,13 @@
+manifest  365e964304fed119ef2a00aed5f254194ba49243e9acef60c3ffe82da1d898ca
+symbol    BTC/USDT      b76033fc730034c8d1a45020ecaa2bb06f72149572ababe2c57d86f32a98092d
+symbol    ETH/USDT      4ac949a071b7f7265c1f1d9a4ecebe525c1ad6f24bc11dd54207a0d9f570f0bf
+symbol    SOL/USDT      b8e85a0cdffcfe0cd91a2c296705c3ac828bdf2ae0091ab45bcafeff789ba353
+symbol    BNB/USDT      125c5128f2475d13e8303eff10d68c014e350e82ac03c9bdbd3efc0be711543a
+symbol    ADA/USDT      04667dd0d2c740ea1026ee8e9089a74d3af9cdc13479b727d7277032c5e6a0ad
+symbol    XRP/USDT      166404332ccfa7593d8aadecdabe3c386c44eabe6755905fdbf01a9d5fe48690
+input     BTC/USDT      d69de3160f7dced51a8cb3cf8a34fdfdc55c1f35efc5441ffef837287e2d45ae
+input     ETH/USDT      b5c2cf37875c0a4459c2312585c59b52c0bf4deb50cc79bc75120cf1afad6329
+input     SOL/USDT      07091ab2af57fe60a91d68069c9953a42f22556ed2ac9a4a01a99eb6c35dabd8
+input     BNB/USDT      4e9ce87ed40a161aef21f6478260cb59fadb8cd6baa42fa6ad1f9e63dc03fb1d
+input     ADA/USDT      af9f810e9d12904bb09833236d11b673283d850731178a5e36cbc083c28248a0
+input     XRP/USDT      eb2591b41af338c9f4a54105a22fc1980f01d8389ce8f1e40461f5e90ae4d6d7

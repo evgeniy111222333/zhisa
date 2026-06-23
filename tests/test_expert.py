@@ -9,6 +9,7 @@ from zhisa.data.expert import (
     ExpertPolicy,
     MomentumExpert,
     SmaCrossExpert,
+    SymmetricUtilityExpert,
     SUPPORTED_EXPERTS,
     TripleBarrierExpert,
     build_expert,
@@ -24,7 +25,7 @@ from zhisa.env.actions import DiscreteAction
 
 
 def test_build_expert_known_kinds():
-    for kind in ("triple_barrier", "momentum", "sma_cross"):
+    for kind in ("triple_barrier", "momentum", "sma_cross", "symmetric_utility"):
         e = build_expert(kind)
         assert isinstance(e, ExpertPolicy)
         assert e.name == kind
@@ -61,8 +62,52 @@ def test_expert_warmup_bars_return_skip(kind, small_market):
     """All experts must return SKIP (0) at bars where the observation isn't ready."""
     e = build_expert(kind)
     # First ``chart_window`` bars should all be SKIP.
+    expected = DiscreteAction.CLOSE if kind == "symmetric_utility" else DiscreteAction.SKIP
     for t in range(e.chart_window):
-        assert e.predict(small_market, t) == int(DiscreteAction.SKIP)
+        assert e.predict(small_market, t) == int(expected)
+
+
+def test_symmetric_utility_uses_target_position_actions(small_market):
+    expert = SymmetricUtilityExpert(chart_window=32, horizons=(8, 16, 32))
+    actions = expert.predict_array(small_market)
+    valid = {
+        int(DiscreteAction.LONG_25), int(DiscreteAction.LONG_50), int(DiscreteAction.LONG_100),
+        int(DiscreteAction.SHORT_25), int(DiscreteAction.SHORT_50), int(DiscreteAction.SHORT_100),
+        int(DiscreteAction.CLOSE),
+    }
+    assert set(map(int, actions)).issubset(valid)
+    assert int(DiscreteAction.SKIP) not in actions
+    assert int(DiscreteAction.PARTIAL_CLOSE) not in actions
+
+
+def test_symmetric_utility_does_not_turn_two_sided_whipsaw_into_short():
+    n = 160
+    idx = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+    close = np.full(n, 100.0)
+    high = np.full(n, 100.2)
+    low = np.full(n, 99.8)
+    # Both symmetric barriers are touched after the decision bar. Under the
+    # conservative contract, both sides lose and the target must stay flat.
+    high[65:80] = 105.0
+    low[65:80] = 95.0
+    frame = pd.DataFrame({
+        "open": close, "high": high, "low": low, "close": close, "volume": 1.0,
+    }, index=idx)
+    expert = SymmetricUtilityExpert(
+        chart_window=32, horizons=(16,), horizon_weights=(1.0,),
+        take_profit_atr=1.0, stop_loss_atr=1.0,
+    )
+    assert expert.predict(frame, 64) == int(DiscreteAction.CLOSE)
+
+
+def test_symmetric_utility_costs_increase_flat_targets(small_market):
+    low_cost = SymmetricUtilityExpert(chart_window=32, horizons=(8, 16, 32), fee_bps=0, slippage_bps=0)
+    high_cost = SymmetricUtilityExpert(chart_window=32, horizons=(8, 16, 32), fee_bps=30, slippage_bps=20)
+    low_actions = low_cost.predict_array(small_market)
+    high_actions = high_cost.predict_array(small_market)
+    assert np.count_nonzero(high_actions == int(DiscreteAction.CLOSE)) >= np.count_nonzero(
+        low_actions == int(DiscreteAction.CLOSE)
+    )
 
 
 # ---------------------------------------------------------------------------

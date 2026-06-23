@@ -27,9 +27,11 @@ instead of poisoning the optimiser state.
 """
 from __future__ import annotations
 
+import gc
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -44,6 +46,64 @@ from zhisa.utils.logging import get_logger
 from zhisa.utils.timing import Timer
 
 logger = get_logger(__name__)
+
+
+def _pack_chart(chart: np.ndarray) -> np.ndarray:
+    """Store a normalized chart compactly while preserving PPO inputs."""
+    if chart.dtype == np.uint8:
+        return chart
+    normalized = np.nan_to_num(chart, nan=0.0, posinf=1.0, neginf=0.0)
+    return np.rint(np.clip(normalized, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def _chart_tensor(chart, device: torch.device) -> torch.Tensor:
+    tensor = chart.to(device, non_blocking=True) if torch.is_tensor(chart) else torch.from_numpy(chart).to(device, non_blocking=True)
+    if tensor.dtype == torch.uint8:
+        return tensor.float().div_(255.0)
+    return tensor.float()
+
+
+def _release_rollout_memory() -> None:
+    """Return large per-iteration buffers before collecting the next rollout."""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _env_sampling_probabilities(
+    envs: Sequence[TradingEnv], horizon: int,
+) -> np.ndarray:
+    """Weight contiguous segments by their number of valid episode starts."""
+    capacities = np.asarray([
+        max(1, len(env.df) - env.cfg.window - horizon)
+        for env in envs
+    ], dtype=np.float64)
+    return capacities / capacities.sum()
+
+
+def _balanced_env_schedule(
+    probabilities: np.ndarray,
+    n_episodes: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Return a shuffled per-iteration env schedule close to target weights."""
+    if n_episodes < 1:
+        raise ValueError("n_episodes must be positive")
+    probs = np.asarray(probabilities, dtype=np.float64)
+    if probs.ndim != 1 or probs.size == 0:
+        raise ValueError("probabilities must be a non-empty 1-D array")
+    if not np.isfinite(probs).all() or probs.sum() <= 0:
+        raise ValueError("probabilities must be finite and have positive sum")
+    probs = probs / probs.sum()
+    expected = probs * int(n_episodes)
+    counts = np.floor(expected).astype(np.int64)
+    remainder = int(n_episodes) - int(counts.sum())
+    if remainder > 0:
+        order = np.argsort(-(expected - counts))
+        counts[order[:remainder]] += 1
+    schedule = np.repeat(np.arange(probs.size, dtype=np.int64), counts)
+    rng.shuffle(schedule)
+    return schedule
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +125,7 @@ class PPOConfig:
     # Loss coefficients
     clip_ratio: float = 0.2
     value_coef: float = 0.5
+    value_loss_scale: float = 1.0
     entropy_coef: float = 0.01
     # Discounting / GAE
     gamma: float = 0.99
@@ -78,6 +139,15 @@ class PPOConfig:
     env_cfg: EnvConfig = field(default_factory=EnvConfig)
     seed: int = 0
     checkpoint: Optional[str] = None
+    best_checkpoint: Optional[str] = None
+    checkpoint_every_iterations: int = 0
+    source_checkpoint: Optional[str] = None
+    dataset_root: Optional[str] = None
+    dataset_manifest_checksum: Optional[str] = None
+    eval_every_iterations: int = 0
+    eval_episodes: int = 12
+    early_stopping_patience: int = 0
+    early_stopping_min_delta: float = 0.0
     log_every: int = 1
 
 
@@ -265,6 +335,7 @@ def ppo_loss(
     entropy: torch.Tensor,
     clip_ratio: float = 0.2,
     value_coef: float = 0.5,
+    value_loss_scale: float = 1.0,
     entropy_coef: float = 0.01,
 ) -> dict[str, torch.Tensor]:
     """The standard PPO clipped surrogate loss.
@@ -286,7 +357,8 @@ def ppo_loss(
 
     # Value loss: plain MSE; PPO often also clips the value head, but
     # the unclipped form is sufficient for our small network.
-    value_loss = F.mse_loss(values, returns)
+    scale = float(value_loss_scale)
+    value_loss = F.mse_loss(values * scale, returns * scale)
 
     # Reduce entropy to a scalar for the total loss. We log the same
     # scalar in the returned dict so downstream logging is consistent.
@@ -299,6 +371,15 @@ def ppo_loss(
         "entropy": entropy_scalar,
         "total": total,
     }
+
+
+def approximate_kl(
+    old_log_probs: torch.Tensor,
+    new_log_probs: torch.Tensor,
+) -> torch.Tensor:
+    """Non-negative second-order KL approximation used for PPO stopping."""
+    log_ratio = new_log_probs - old_log_probs
+    return ((log_ratio.exp() - 1.0) - log_ratio).mean()
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +395,16 @@ class PPOTrainer:
         self.cfg = cfg or PPOConfig()
         self.device = torch.device(self.cfg.device)
         self.model.to(self.device)
+        # PPO's old/new likelihood ratio must not include independent dropout
+        # noise. Eval mode disables dropout while still allowing gradients.
+        self.model.eval()
         params = [p for p in model.parameters() if p.requires_grad]
         self.opt = build_optimizer(model, self.cfg.optim)
         self._rng = np.random.default_rng(self.cfg.seed)
         self._step = 0
+        self._iteration = 0
+        self._best_val_score = float("-inf")
+        self._bad_evals = 0
 
     # ------------------------------------------------------------------
     # Rollout
@@ -333,7 +420,7 @@ class PPOTrainer:
         a uniform random action so the rollout can continue instead
         of crashing inside :class:`torch.distributions.Categorical`.
         """
-        chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(self.device)
+        chart = _chart_tensor(obs["chart"], self.device).unsqueeze(0)
         num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(self.device)
         ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(self.device)
         if history is not None:
@@ -357,7 +444,9 @@ class PPOTrainer:
             entropy = dist.entropy()
         return int(action.item()), logp.squeeze(0), value.squeeze(0), entropy.squeeze(0), next_history
 
-    def _collect_rollout(self, env: TradingEnv) -> tuple[RolloutBuffer, dict]:
+    def _collect_rollout(
+        self, env: TradingEnv | Sequence[TradingEnv]
+    ) -> tuple[RolloutBuffer, dict]:
         """Run ``n_episodes`` episodes and return a populated buffer.
 
         Per-step host<->device traffic is minimised:
@@ -372,18 +461,40 @@ class PPOTrainer:
         """
         buf = RolloutBuffer()
         ep_returns: list[float] = []
+        ep_equity_returns: list[float] = []
+        ep_max_drawdowns: list[float] = []
         ep_lengths: list[int] = []
         model_memory = self.model.memory
         max_hist_len = model_memory.cfg.max_len - 1 if model_memory is not None else 0
         embed_dim = self.model.cfg.embed_dim
-        for ep in range(self.cfg.n_episodes):
-            obs, _ = env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
+        envs = list(env) if isinstance(env, Sequence) else [env]
+        if not envs:
+            raise ValueError("at least one trading environment is required")
+        env_probabilities = _env_sampling_probabilities(
+            envs, self.cfg.max_steps_per_episode,
+        )
+        env_schedule = _balanced_env_schedule(
+            env_probabilities,
+            self.cfg.n_episodes,
+            self._rng,
+        )
+        for env_idx in env_schedule:
+            episode_env = envs[int(env_idx)]
+            obs, _ = episode_env.reset(seed=int(self._rng.integers(0, 2**31 - 1)))
             ep_return = 0.0
+            peak_equity = float(episode_env.cfg.initial_equity)
+            max_drawdown = 0.0
+            final_equity = peak_equity
             steps = 0
             history: Optional[torch.Tensor] = None
             for _ in range(self.cfg.max_steps_per_episode):
-                action, logp, value, _, next_history = self._select_action(obs, history)
-                next_obs, reward, terminated, truncated, _info = env.step(action)
+                packed_chart = _pack_chart(obs["chart"])
+                # The rollout and update must see the same decoded pixels;
+                # otherwise quantisation alone would create a fake PPO ratio.
+                policy_obs = dict(obs)
+                policy_obs["chart"] = packed_chart
+                action, logp, value, _, next_history = self._select_action(policy_obs, history)
+                next_obs, reward, terminated, truncated, info = episode_env.step(action)
 
                 # History slot: keep as torch.Tensor on the model's device
                 # when the model has working memory. The buffer's
@@ -391,10 +502,11 @@ class PPOTrainer:
                 # whole rollout on-device. Falls back to numpy only when
                 # the model has no memory (history is unused downstream).
                 if model_memory is not None:
-                    if next_history is not None:
-                        # ``next_history`` is shape (1, S, D) from the policy;
-                        # squeeze the leading batch dim for storage.
-                        hist_for_buffer = next_history.squeeze(0)
+                    if history is not None:
+                        # Store the history that produced old_log_prob. Using
+                        # next_history here shifts memory by one observation and
+                        # invalidates PPO's likelihood-ratio contract.
+                        hist_for_buffer = history.squeeze(0)
                     else:
                         # Defensive fallback: a zero history on the right
                         # device. Should not trigger in practice.
@@ -406,7 +518,7 @@ class PPOTrainer:
                     hist_for_buffer = None
 
                 buf.add(Transition(
-                    chart=obs["chart"],
+                    chart=packed_chart,
                     numeric=obs["numeric"],
                     context=obs["context"],
                     action=action,
@@ -417,15 +529,27 @@ class PPOTrainer:
                     history=hist_for_buffer,
                 ))
                 ep_return += float(reward)
+                final_equity = float(info.get("equity", final_equity))
+                peak_equity = max(peak_equity, final_equity)
+                max_drawdown = max(
+                    max_drawdown,
+                    (peak_equity - final_equity) / max(peak_equity, 1e-12),
+                )
                 steps += 1
                 obs = next_obs
                 history = next_history
                 if terminated or truncated:
                     break
             ep_returns.append(ep_return)
+            ep_equity_returns.append(
+                final_equity / max(float(episode_env.cfg.initial_equity), 1e-12) - 1.0
+            )
+            ep_max_drawdowns.append(max_drawdown)
             ep_lengths.append(steps)
         return buf, {
             "ep_returns": ep_returns,
+            "ep_equity_returns": ep_equity_returns,
+            "ep_max_drawdowns": ep_max_drawdowns,
             "ep_lengths": ep_lengths,
         }
 
@@ -468,7 +592,7 @@ class PPOTrainer:
         ret_t = _to_device(returns)
         old_logp_t = _to_device(stacked["log_prob"])
         action_t = _to_device(stacked["action"])
-        chart_t = _to_device(stacked["chart"]).float()
+        chart_t = _chart_tensor(stacked["chart"], self.device)
         num_t = _to_device(stacked["numeric"]).float()
         ctx_t = _to_device(stacked["context"]).float()
 
@@ -503,6 +627,7 @@ class PPOTrainer:
                     entropy=entropy,
                     clip_ratio=cfg.clip_ratio,
                     value_coef=cfg.value_coef,
+                    value_loss_scale=cfg.value_loss_scale,
                     entropy_coef=cfg.entropy_coef,
                 )
 
@@ -520,8 +645,8 @@ class PPOTrainer:
 
                 # Early-stop on large KL (heuristic from the original PPO paper).
                 with torch.no_grad():
-                    kl = (old_logp_t[idx] - new_logp).mean().item()
-                if abs(kl) > cfg.target_kl:
+                    kl = approximate_kl(old_logp_t[idx], new_logp).item()
+                if kl > cfg.target_kl:
                     logger.info("ppo early-stop at epoch %d: KL=%.4f", epoch, kl)
                     break
             else:
@@ -533,48 +658,157 @@ class PPOTrainer:
             return {"policy": 0.0, "value": 0.0, "entropy": 0.0, "total": 0.0}
         return {k: float(np.mean(v)) for k, v in stats.items()}
 
+    @torch.no_grad()
+    def _evaluate_policy(
+        self,
+        envs: Sequence[TradingEnv],
+        n_episodes: int,
+        seed: int,
+        cvar_alpha: float = 0.1,
+    ) -> dict[str, float]:
+        """Deterministic, market-balanced evaluation on financial returns."""
+        if not envs:
+            raise ValueError("evaluation requires at least one environment")
+        if n_episodes < 1:
+            raise ValueError("n_episodes must be positive")
+        if not 0.0 < cvar_alpha <= 1.0:
+            raise ValueError("cvar_alpha must be in (0, 1]")
+        was_training = self.model.training
+        self.model.eval()
+        rng = np.random.default_rng(seed)
+        env_order = rng.permutation(len(envs))
+        episode_seeds = rng.integers(0, 2**31 - 1, size=n_episodes)
+        returns: list[float] = []
+        drawdowns: list[float] = []
+        for episode_idx in range(n_episodes):
+            # Round-robin after a seeded permutation prevents large markets or
+            # lucky random draws from dominating checkpoint selection.
+            env = envs[int(env_order[episode_idx % len(env_order)])]
+            obs, _ = env.reset(seed=int(episode_seeds[episode_idx]))
+            history = None
+            peak = float(env.cfg.initial_equity)
+            final = peak
+            max_dd = 0.0
+            for _step in range(self.cfg.max_steps_per_episode):
+                chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(self.device)
+                numeric = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(self.device)
+                context = torch.from_numpy(obs["context"]).unsqueeze(0).to(self.device)
+                out = self.model(chart=chart, numeric=numeric, context=context, history=history)
+                action = int(out["policy_logits"].argmax(dim=-1).item())
+                history = out.get("next_history")
+                obs, _, terminated, truncated, info = env.step(action)
+                final = float(info.get("equity", final))
+                peak = max(peak, final)
+                max_dd = max(max_dd, (peak - final) / max(peak, 1e-12))
+                if terminated or truncated:
+                    break
+            returns.append(final / max(float(env.cfg.initial_equity), 1e-12) - 1.0)
+            drawdowns.append(max_dd)
+        if was_training:
+            self.model.train()
+        ordered = np.sort(np.asarray(returns, dtype=np.float64))
+        tail_n = max(1, int(np.floor(cvar_alpha * len(ordered))))
+        cvar = float(ordered[:tail_n].mean())
+        return {
+            "mean_equity_return": float(ordered.mean()),
+            "cvar": cvar,
+            "cvar_alpha": float(cvar_alpha),
+            "cvar_10": cvar if cvar_alpha == 0.1 else float(
+                ordered[:max(1, int(np.floor(0.1 * len(ordered))))].mean()
+            ),
+            "worst_equity_return": float(ordered[0]),
+            "mean_max_drawdown": float(np.mean(drawdowns)),
+        }
+
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
 
-    def fit(self, df: pd.DataFrame) -> dict:
+    def fit(
+        self,
+        df: pd.DataFrame | Sequence[pd.DataFrame],
+        val_df: Optional[pd.DataFrame | Sequence[pd.DataFrame]] = None,
+    ) -> dict:
         """Run PPO on the given OHLCV DataFrame.
 
         Returns a dict with per-iteration history and aggregate stats.
         """
         cfg = self.cfg
-        env = TradingEnv(df, cfg=cfg.env_cfg)
+        frames = list(df) if isinstance(df, Sequence) and not isinstance(df, pd.DataFrame) else [df]
+        envs = [TradingEnv(frame, cfg=cfg.env_cfg) for frame in frames]
+        val_envs: list[TradingEnv] = []
+        if val_df is not None:
+            val_frames = list(val_df) if isinstance(val_df, Sequence) and not isinstance(val_df, pd.DataFrame) else [val_df]
+            val_envs = [TradingEnv(frame, cfg=cfg.env_cfg) for frame in val_frames]
         history: list[dict] = []
         timer = Timer()
-        for it in range(cfg.n_iterations):  # outer loop = n_iterations
+        for it in range(self._iteration, cfg.n_iterations):
+            is_best = False
             # In a clean PPO loop the outer "iteration" is "collect a
             # rollout of T steps and update". Here we collect a fixed
             # number of episodes per iteration to keep the loop simple.
             timer.start()
-            buf, rollout_stats = self._collect_rollout(env)
+            buf, rollout_stats = self._collect_rollout(envs)
             losses = self._ppo_update(buf)
             timer.stop()
             mean_return = float(np.mean(rollout_stats["ep_returns"]))
-            history.append({
+            entry = {
                 "iteration": it,
                 "n_episodes": len(rollout_stats["ep_returns"]),
                 "rollout_steps": len(buf),
                 "mean_return": mean_return,
+                "mean_equity_return": float(np.mean(rollout_stats["ep_equity_returns"])),
+                "worst_equity_return": float(np.min(rollout_stats["ep_equity_returns"])),
+                "mean_max_drawdown": float(np.mean(rollout_stats["ep_max_drawdowns"])),
                 "policy_loss": losses["policy"],
                 "value_loss": losses["value"],
                 "entropy": losses["entropy"],
                 "total_loss": losses["total"],
                 "elapsed_s": timer.elapsed,
-            })
+            }
+            if val_envs and cfg.eval_every_iterations > 0 and (it + 1) % cfg.eval_every_iterations == 0:
+                entry["val"] = self._evaluate_policy(
+                    val_envs, cfg.eval_episodes, cfg.seed + 100_000,
+                )
+                val_score = entry["val"]["mean_equity_return"]
+                if val_score > self._best_val_score + cfg.early_stopping_min_delta:
+                    self._best_val_score = val_score
+                    self._bad_evals = 0
+                    is_best = True
+                else:
+                    self._bad_evals += 1
+                    is_best = False
+            history.append(entry)
+            self._iteration = it + 1
+            if val_envs and is_best and cfg.best_checkpoint:
+                self.save(cfg.best_checkpoint)
             if (it + 1) % cfg.log_every == 0:
                 logger.info(
-                    "ppo it=%d episodes=%d steps=%d mean_return=%.4f "
-                    "policy=%.4f value=%.4f entropy=%.4f total=%.4f elapsed=%.1fs",
+                    "ppo it=%d episodes=%d steps=%d shaped_return=%.4f "
+                    "equity_return=%.5f max_dd=%.5f policy=%.4f value=%.4f "
+                    "entropy=%.4f total=%.4f elapsed=%.1fs",
                     it, len(rollout_stats["ep_returns"]), len(buf),
-                    mean_return, losses["policy"], losses["value"],
+                    mean_return, entry["mean_equity_return"], entry["mean_max_drawdown"],
+                    losses["policy"], losses["value"],
                     losses["entropy"], losses["total"], timer.elapsed,
                 )
             timer.reset()
+            if cfg.checkpoint_every_iterations > 0 and (it + 1) % cfg.checkpoint_every_iterations == 0:
+                checkpoint = Path(cfg.checkpoint or "artifacts/s4/policy.pt")
+                self.save(str(checkpoint.with_name(f"{checkpoint.stem}_iter{it + 1}{checkpoint.suffix}")))
+            should_stop = (
+                bool(val_envs)
+                and cfg.early_stopping_patience > 0
+                and self._bad_evals >= cfg.early_stopping_patience
+            )
+            # Do this before the next _collect_rollout call. Assignment keeps
+            # the previous local alive while the RHS is evaluated, which can
+            # otherwise overlap two multi-GB buffers.
+            del buf, rollout_stats
+            _release_rollout_memory()
+            if should_stop:
+                logger.info("ppo early stopping at iteration %d; best_val_return=%.6f", it, self._best_val_score)
+                break
         if cfg.checkpoint:
             self.save(cfg.checkpoint)
         return {"history": history}
@@ -586,16 +820,62 @@ class PPOTrainer:
         cfg_dict = self.model.cfg.__dict__.copy()
         if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
             cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
-        torch.save({
+        payload = {
             "model": self.model.state_dict(),
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "ppo_config": self.cfg.__dict__,
+            "optimizer": self.opt.state_dict(),
+            "trainer_state": {
+                "step": self._step,
+                "iteration": self._iteration,
+                "best_val_score": self._best_val_score,
+                "bad_evals": self._bad_evals,
+                "numpy_rng_state": self._rng.bit_generator.state,
+                "torch_rng_state": torch.get_rng_state(),
+                "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
             "checkpoint_meta": {
                 "stage": "s4_ppo",
                 "trading_policy_ready": True,
                 "policy_head_trained": True,
                 "policy_training": "ppo_reward_optimization",
+                "source_checkpoint": self.cfg.source_checkpoint,
+                "dataset": {
+                    "root": self.cfg.dataset_root,
+                    "manifest_checksum": self.cfg.dataset_manifest_checksum,
+                },
             },
-        }, p)
+        }
+        tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}")
+        try:
+            torch.save(payload, tmp)
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
         logger.info("ppo checkpoint saved to %s", p)
+
+    def load(self, path: str) -> dict:
+        payload = torch.load(path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(payload["model"])
+        if payload.get("optimizer"):
+            self.opt.load_state_dict(payload["optimizer"])
+        state = payload.get("trainer_state") or {}
+        self._step = int(state.get("step", 0))
+        self._iteration = int(state.get("iteration", 0))
+        self._best_val_score = float(
+            state.get("best_val_score", state.get("best_val_cvar", float("-inf")))
+        )
+        self._bad_evals = int(state.get("bad_evals", 0))
+        if state.get("numpy_rng_state"):
+            self._rng.bit_generator.state = state["numpy_rng_state"]
+        if state.get("torch_rng_state") is not None:
+            torch.set_rng_state(state["torch_rng_state"].cpu())
+        if torch.cuda.is_available() and state.get("cuda_rng_state") is not None:
+            torch.cuda.set_rng_state_all([item.cpu() for item in state["cuda_rng_state"]])
+        return {
+            "step": self._step,
+            "iteration": self._iteration,
+            "stage": (payload.get("checkpoint_meta") or {}).get("stage"),
+        }

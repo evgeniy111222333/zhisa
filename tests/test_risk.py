@@ -92,6 +92,40 @@ def test_risk_guard_blocks_on_instrument_cap():
                       positions={"BTC": 0.0}, current_price=100.0)
     # Should be clipped (suggested_size between 0 and 1) but allowed
     assert d.allowed
+
+
+def test_risk_guard_uses_signed_target_for_reversal():
+    g = RiskGuard(RiskLimits(
+        max_position_per_instrument=1.0,
+        max_gross_exposure=1.0,
+        max_leverage=1.0,
+    ))
+    d = g.check_order(
+        requested_size_equity=2.0,
+        target_position_equity=-1.0,
+        instrument="BTC",
+        positions={"BTC": 1.0},
+        current_price=100.0,
+    )
+    assert d.allowed
+    assert d.suggested_size == pytest.approx(1.0)
+
+
+def test_risk_guard_counts_short_target_as_gross_exposure():
+    g = RiskGuard(RiskLimits(
+        max_position_per_instrument=1.0,
+        max_gross_exposure=0.75,
+        max_leverage=1.0,
+    ))
+    d = g.check_order(
+        requested_size_equity=0.5,
+        target_position_equity=-1.0,
+        instrument="BTC",
+        positions={"BTC": -0.5},
+        current_price=100.0,
+    )
+    assert d.allowed
+    assert d.suggested_size == pytest.approx(0.5)
     assert d.suggested_size < 1.0
 
 

@@ -275,6 +275,15 @@ def test_lru_chart_cache_bounds_memory():
     assert len(ds._chart_cache) <= 4, f"LRU cache exceeded: {len(ds._chart_cache)}"
 
 
+def test_negative_chart_cache_size_disables_lazy_cache():
+    df = _build_df(80)
+    spec = _build_spec(chart_window=16, image_size=16)
+    ds = MarketDataset(df, spec=spec, cache_charts=False, chart_cache_size=-1)
+    _ = ds[0]
+    _ = ds[1]
+    assert len(ds._chart_cache) == 0
+
+
 def test_dataloader_factory_picks_workers_for_fast_path():
     """Fast datasets should default to num_workers=0 to avoid IPC overhead."""
     set_seed(1234)

@@ -13,6 +13,7 @@ from zhisa.data.crypto_loader import CCXTCryptoLoader
 from zhisa.scripts._real_data import (
     frame_summary,
     normalize_ohlcv_frame,
+    parse_utc_timestamp,
     series_key_from_args,
     timestamp_to_ms,
 )
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--db-root", type=str, default="data/tsdb")
     parser.add_argument("--out-csv", type=str, default=None)
+    parser.add_argument("--until", type=str, default=None, help="UTC timestamp, e.g. 2026-05-17")
     args = parser.parse_args(argv)
 
     loader = CCXTCryptoLoader(exchange_id=args.exchange)
@@ -40,6 +42,12 @@ def main(argv: list[str] | None = None) -> int:
         max_bars=int(args.max_bars) if args.max_bars else None,
     )
     df = normalize_ohlcv_frame(df)
+    
+    if args.until:
+        until_ts = parse_utc_timestamp(args.until)
+        if until_ts is not None:
+            df = df[df.index <= until_ts]
+            
     if len(df) == 0:
         raise RuntimeError("Exchange returned no OHLCV rows")
 

@@ -1,0 +1,18 @@
+{
+  "instrument": "ADA/USDT",
+  "timeframe": "1h",
+  "start": "2020-10-01T00:00:00+00:00",
+  "end": "2026-06-20T18:00:00+00:00",
+  "row_count": 50111,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1607908,
+  "checksum": "07f2b0c378d8d36f64de9c43876483f9",
+  "created_at": "2026-06-20T19:08:55.454230+00:00",
+  "updated_at": "2026-06-20T19:08:55.454230+00:00"
+}

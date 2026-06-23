@@ -80,6 +80,7 @@ class EnvConfig:
     trailing_stop_pct: float = 0.0   # e.g. 0.01 -> trail SL by 1% from peak price
     # ---- Episode control. ----
     episode_length: int = 0          # 0 -> no cap; >0 -> truncate after N steps from reset
+    random_start: bool = False       # sample a valid temporal start on reset (training only)
     # ---- Drawdown kill-switch. ----
     kill_on_drawdown: bool = True    # terminate episode when max_drawdown is breached
     # ---- Conservative fill. ----
@@ -87,6 +88,10 @@ class EnvConfig:
     # assumption is that the unfavourable side was hit first. This
     # avoids hindsight bias in backtests.
     conservative_bar_fill: bool = True
+    # Independent training episodes are financially closed at their boundary.
+    # Otherwise terminal returns omit exit costs and PPO bootstraps from zero
+    # while still carrying an economically open position.
+    liquidate_on_episode_end: bool = True
     # ---- Funding rate (perpetual futures). ----
     # Funding is paid by longs to shorts when positive, and vice
     # versa. A typical 8h funding rate on BTC is 0.01% (1e-4).
@@ -182,10 +187,13 @@ class TradingEnv(gym.Env):
         self._reset_state()
 
     # -------- internal helpers --------
-    def _reset_state(self) -> None:
+    def _reset_state(self, start_index: Optional[int] = None) -> None:
         cfg = self.cfg
-        self._t = cfg.window
-        self._t_start = cfg.window
+        start = cfg.window if start_index is None else int(start_index)
+        if start < cfg.window or start >= len(self.df) - 1:
+            raise ValueError(f"invalid episode start {start} for {len(self.df)} bars")
+        self._t = start
+        self._t_start = start
         self._position = 0.0
         self._avg_entry = 0.0
         self._peak_price = 0.0
@@ -392,14 +400,25 @@ class TradingEnv(gym.Env):
     ) -> Tuple[dict, dict]:
         if seed is not None:
             self._rng = np.random.default_rng(int(seed))
-            set_seed(int(seed))
-        self._reset_state()
-        return self._obs(), {}
+        options = options or {}
+        start_index = options.get("start_index")
+        if start_index is None and self.cfg.random_start:
+            horizon = max(1, int(self.cfg.episode_length or 1))
+            max_start = len(self.df) - horizon - 1
+            if max_start < self.cfg.window:
+                raise ValueError(
+                    f"frame has {len(self.df)} bars but random-start episode needs "
+                    f"window={self.cfg.window} plus horizon={horizon}"
+                )
+            start_index = int(self._rng.integers(self.cfg.window, max_start + 1))
+        self._reset_state(start_index=start_index)
+        return self._obs(), {"start_index": self._t_start}
 
     def step(self, action: int) -> Tuple[dict, float, bool, bool, dict]:
         cfg = self.cfg
         if not self.action_space.contains(int(action)):
             raise ValueError(f"Invalid action: {action}")
+        self._last_exit_reason = ""
 
         price_now = float(self.df["close"].iloc[self._t])
         bar_high = float(self.df["high"].iloc[self._t])
@@ -422,16 +441,10 @@ class TradingEnv(gym.Env):
                 bar_low, bar_high,
             )
         if exit_triggered:
-            # Close the open position at the barrier price.
-            ret = (exit_price / max(self._avg_entry, 1e-12)) - 1.0
-            realised = self._position * cfg.max_leverage * ret
-            self._equity += realised
-            self._position = 0.0
-            self._avg_entry = 0.0
-            self._peak_price = 0.0
+            # Route forced exits through the same fill/accounting path as an
+            # agent CLOSE so realised PnL, fees and slippage stay consistent.
             price_now = exit_price
             self._last_exit_reason = exit_reason
-            # Skip agent action; treat the bar as a forced close.
             action = int(DiscreteAction.CLOSE)
 
         # 2. Translate the (possibly overridden) action.
@@ -475,6 +488,7 @@ class TradingEnv(gym.Env):
                 instrument="primary",
                 positions={"primary": self._position * cfg.max_leverage},
                 current_price=price_now,
+                target_position_equity=target * cfg.max_leverage,
             )
             risk_allowed = bool(decision.allowed)
             risk_reason = decision.reason
@@ -484,6 +498,11 @@ class TradingEnv(gym.Env):
             else:
                 target = self._position + delta * decision.suggested_size
         final_target = float(target)
+        if not exit_triggered and self._position != 0.0:
+            if target == 0.0:
+                self._last_exit_reason = "agent_close"
+            elif np.sign(target) != np.sign(self._position):
+                self._last_exit_reason = "agent_reversal"
 
         # 4. Execution
         size_units = abs(target - self._position) * cfg.max_leverage / max(price_now, 1e-12)
@@ -497,29 +516,47 @@ class TradingEnv(gym.Env):
             rng=self._rng,
         )
         if fill.filled > 0:
-            if self._position == 0 or np.sign(self._position) != np.sign(target):
+            old_position = float(self._position)
+            old_avg_entry = float(self._avg_entry)
+            fill_ratio = min(1.0, fill.filled / max(fill.requested, 1e-12))
+            new_position = old_position + (target - old_position) * fill_ratio
+
+            # Realise only the exposure that was actually closed. This covers
+            # reductions, full closes and the old leg of a reversal.
+            closed_exposure = 0.0
+            if old_position != 0.0:
+                if new_position == 0.0 or np.sign(new_position) != np.sign(old_position):
+                    closed_exposure = abs(old_position)
+                elif abs(new_position) < abs(old_position):
+                    closed_exposure = abs(old_position) - abs(new_position)
+            if closed_exposure > 0.0 and old_avg_entry > 0.0:
+                price_return = fill.price / old_avg_entry - 1.0
+                self._equity += (
+                    np.sign(old_position)
+                    * closed_exposure
+                    * cfg.max_leverage
+                    * price_return
+                )
+
+            if new_position == 0.0:
+                self._avg_entry = 0.0
+                self._peak_price = 0.0
+            elif old_position == 0.0 or np.sign(old_position) != np.sign(new_position):
                 self._avg_entry = fill.price
                 self._peak_price = fill.price
-            else:
-                # VWAP update
-                old_notional = self._position * self._avg_entry
-                added_notional = (target - self._position) * fill.price
-                if target != 0 and abs(target) > 1e-12:
-                    # Sign-preserving guard: keep target's sign, avoid /0.
-                    denom = target if abs(target) > 1e-9 else (
-                        1e-9 if target > 0 else -1e-9
-                    )
-                    new_avg = (old_notional + added_notional) / denom
-                    # Sanity: avg_entry must be positive and finite.
-                    if math.isfinite(new_avg) and new_avg > 0:
-                        self._avg_entry = new_avg
-                    # else: keep the old avg_entry; the position update
-                    # below will not be poisoned.
-                if is_long := (target > 0):
+            elif abs(new_position) > abs(old_position):
+                added_exposure = abs(new_position) - abs(old_position)
+                self._avg_entry = (
+                    abs(old_position) * old_avg_entry + added_exposure * fill.price
+                ) / max(abs(new_position), 1e-12)
+                if new_position > 0:
                     self._peak_price = max(self._peak_price, fill.price)
                 else:
                     self._peak_price = min(self._peak_price, fill.price)
-            self._position = target
+            else:
+                # A reduction keeps the entry basis of the remaining leg.
+                self._avg_entry = old_avg_entry
+            self._position = float(new_position)
             self._equity -= fill.fee
         elif target == 0.0 and self._position == 0.0:
             # Manual close without a fill — clear position bookkeeping.
@@ -560,6 +597,9 @@ class TradingEnv(gym.Env):
 
         new_equity = self._mark_to_market()
         turnover = abs(fill.filled) * price_now / max(self._equity, 1e-12)
+        total_fee = float(fill.fee)
+        total_slippage_bps = float(fill.slippage_bps)
+        terminal_fill = None
         self._turnover = turnover
         self._risk.state.update_equity(new_equity)
 
@@ -575,12 +615,56 @@ class TradingEnv(gym.Env):
             truncated = True
             self._last_exit_reason = self._last_exit_reason or "episode_length_cap"
 
+        # 8. Financially close independent episodes. The terminal fill is
+        # included in reward and info so validation/CVaR cannot avoid exit
+        # costs by carrying exposure beyond the sampled horizon.
+        if (terminated or truncated) and cfg.liquidate_on_episode_end and self._position != 0.0:
+            terminal_price = float(self.df["close"].iloc[self._t])
+            terminal_size = abs(self._position) * cfg.max_leverage / max(terminal_price, 1e-12)
+            terminal_fill = execute_order(
+                side=-int(np.sign(self._position)),
+                requested_size=terminal_size,
+                ref_price=terminal_price,
+                book_top_size=1.0,
+                cfg=self._exec_cfg,
+                rng=self._rng,
+            )
+            if terminal_fill.filled > 0.0:
+                fill_ratio = min(
+                    1.0,
+                    terminal_fill.filled / max(terminal_fill.requested, 1e-12),
+                )
+                closed_exposure = abs(self._position) * fill_ratio
+                price_return = terminal_fill.price / max(self._avg_entry, 1e-12) - 1.0
+                self._equity += (
+                    np.sign(self._position)
+                    * closed_exposure
+                    * cfg.max_leverage
+                    * price_return
+                )
+                self._position *= 1.0 - fill_ratio
+                if abs(self._position) <= 1e-9:
+                    self._position = 0.0
+                    self._avg_entry = 0.0
+                    self._peak_price = 0.0
+                self._equity -= terminal_fill.fee
+                terminal_turnover = (
+                    abs(terminal_fill.filled) * terminal_fill.price
+                    / max(self._equity, 1e-12)
+                )
+                turnover += terminal_turnover
+                total_fee += float(terminal_fill.fee)
+                total_slippage_bps += float(terminal_fill.slippage_bps)
+                new_equity = self._mark_to_market(terminal_price)
+                self._risk.state.update_equity(new_equity)
+        self._turnover = turnover
+
         reward, self._reward_state = compute_reward(
             self._reward_state,
             new_equity=new_equity,
             new_position=self._position,
             turnover=turnover,
-            slippage_bps=fill.slippage_bps,
+            slippage_bps=total_slippage_bps,
             weights=cfg.reward_weights,
         )
         # ---- Defense-in-depth NaN/Inf guards ----
@@ -609,7 +693,7 @@ class TradingEnv(gym.Env):
             "position": self._position,
             "fill_price": fill.price,
             "slippage_bps": fill.slippage_bps,
-            "fee": fill.fee,
+            "fee": total_fee,
             "turnover": turnover,
             "price": price_now,
             "atr": atr_val,
@@ -624,6 +708,9 @@ class TradingEnv(gym.Env):
             "risk_allowed": risk_allowed,
             "risk_reason": risk_reason,
             "risk_suggested_size": risk_suggested_size,
+            "terminal_liquidation": terminal_fill is not None,
+            "terminal_fill_price": terminal_fill.price if terminal_fill is not None else 0.0,
+            "terminal_fee": terminal_fill.fee if terminal_fill is not None else 0.0,
         }
         return self._obs(), float(reward), bool(terminated), bool(truncated), info
 

@@ -24,9 +24,10 @@ overridden to add the dual update and the CVaR penalty.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,7 +42,10 @@ from zhisa.training.s4_rl import (
     PPOTrainer,
     RolloutBuffer,
     Transition,
+    _chart_tensor,
+    _release_rollout_memory,
     compute_gae,
+    approximate_kl,
     ppo_loss,
 )
 from zhisa.utils.logging import get_logger
@@ -74,6 +78,12 @@ class CVaRPPOConfig(PPOConfig):
             raise ValueError(f"cvar_threshold must be >= 0, got {self.cvar_threshold}")
         if self.cvar_lambda_lr <= 0.0:
             raise ValueError(f"cvar_lambda_lr must be positive, got {self.cvar_lambda_lr}")
+        if self.cvar_lambda_max <= 0.0:
+            raise ValueError(f"cvar_lambda_max must be positive, got {self.cvar_lambda_max}")
+        if self.cvar_lambda_init < 0.0 or self.cvar_lambda_init > self.cvar_lambda_max:
+            raise ValueError("cvar_lambda_init must be within [0, cvar_lambda_max]")
+        if self.cvar_warmup_iters < 0:
+            raise ValueError("cvar_warmup_iters must be non-negative")
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +105,14 @@ def _per_episode_returns(rewards: np.ndarray, dones: np.ndarray) -> np.ndarray:
     if cur != 0.0 or not out:
         out.append(cur)
     return np.array(out, dtype=np.float32)
+
+
+def _tail_loss_excess(
+    episode_returns: np.ndarray,
+    threshold: float,
+) -> np.ndarray:
+    """Loss severity beyond the allowed CVaR threshold for tail episodes."""
+    return np.maximum(0.0, -np.asarray(episode_returns, dtype=np.float32) - threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +138,7 @@ class CVaRPPOTrainer(PPOTrainer):
         self.cfg: CVaRPPOConfig = cfg
         self.lambda_cvar: float = float(cfg.cvar_lambda_init)
         self.cvar_history: list[dict] = []
+        self._best_val_feasible = False
 
     # ------------------------------------------------------------------
     # PPO update with CVaR penalty
@@ -147,9 +166,12 @@ class CVaRPPOTrainer(PPOTrainer):
             gamma=cfg.gamma, lam=cfg.gae_lambda,
         )
         # -----------------------------------------------------------
-        # CVaR Advantage Penalization (The Math Fix)
+        # Likelihood-ratio CVaR gradient estimate. When the rollout violates
+        # the constraint, actions from tail-loss episodes receive a downside
+        # adjustment proportional to loss severity and 1 / alpha.
         # -----------------------------------------------------------
         ep_returns_np = ep_returns_t.cpu().numpy()
+        cvar_value = cvar_numpy(ep_returns_np, cfg.cvar_alpha)
         var_threshold = float(np.percentile(ep_returns_np, cfg.cvar_alpha * 100))
         
         T = len(rewards)
@@ -160,10 +182,16 @@ class CVaRPPOTrainer(PPOTrainer):
             if dones[t] > 0.5 and ep_idx < len(ep_returns_np) - 1:
                 ep_idx += 1
                 
-        # Penalize steps belonging to tail episodes that violate the threshold
-        violation_mask = (step_to_ep_return <= var_threshold) & (step_to_ep_return < -cfg.cvar_threshold)
-        if np.any(violation_mask) and self.lambda_cvar > 0:
-            advantages[violation_mask] -= float(self.lambda_cvar)
+        rollout_violates = -cvar_value > cfg.cvar_threshold
+        tail_mask = step_to_ep_return <= var_threshold
+        if rollout_violates and np.any(tail_mask) and self.lambda_cvar > 0:
+            tail_losses = _tail_loss_excess(
+                step_to_ep_return[tail_mask],
+                cfg.cvar_threshold,
+            )
+            advantages[tail_mask] -= (
+                float(self.lambda_cvar) * tail_losses / max(cfg.cvar_alpha, 1e-6)
+            )
 
         to_t = lambda a: (  # noqa: E731
             a.to(self.device, non_blocking=True)
@@ -174,7 +202,7 @@ class CVaRPPOTrainer(PPOTrainer):
         ret_t = to_t(returns)
         old_logp_t = to_t(stacked["log_prob"])
         action_t = to_t(stacked["action"])
-        chart_t = to_t(stacked["chart"]).float()
+        chart_t = _chart_tensor(stacked["chart"], self.device)
         num_t = to_t(stacked["numeric"]).float()
         ctx_t = to_t(stacked["context"]).float()
 
@@ -185,7 +213,9 @@ class CVaRPPOTrainer(PPOTrainer):
         # For logging purposes only (the actual penalty is in adv_t)
         with torch.no_grad():
             cvar_value_const = cvar_torch(ep_returns_t, cfg.cvar_alpha)
-        cvar_penalty_const = F.relu(-cvar_value_const - cfg.cvar_threshold)
+        cvar_penalty_const = self.lambda_cvar * F.relu(
+            -cvar_value_const - cfg.cvar_threshold
+        )
 
         stats = {
             "policy": [], "value": [], "entropy": [], "total": [],
@@ -214,6 +244,7 @@ class CVaRPPOTrainer(PPOTrainer):
                     entropy=entropy,
                     clip_ratio=cfg.clip_ratio,
                     value_coef=cfg.value_coef,
+                    value_loss_scale=cfg.value_loss_scale,
                     entropy_coef=cfg.entropy_coef,
                 )
                 # CVaR penalty is already applied to advantages, so we just use PPO total
@@ -233,8 +264,8 @@ class CVaRPPOTrainer(PPOTrainer):
                 stats["cvar_penalty"].append(float(cvar_penalty_const.item()))
                 stats["cvar_value"].append(float(cvar_value_const.item()))
                 with torch.no_grad():
-                    kl = (old_logp_t[idx] - new_logp).mean().item()
-                if abs(kl) > cfg.target_kl:
+                    kl = approximate_kl(old_logp_t[idx], new_logp).item()
+                if kl > cfg.target_kl:
                     logger.info("cvar-ppo early-stop at epoch %d: KL=%.4f", epoch, kl)
                     break
             else:
@@ -251,23 +282,33 @@ class CVaRPPOTrainer(PPOTrainer):
     # Public
     # ------------------------------------------------------------------
 
-    def fit(self, df: pd.DataFrame) -> dict:
+    def fit(
+        self,
+        df: pd.DataFrame | Sequence[pd.DataFrame],
+        val_df: Optional[pd.DataFrame | Sequence[pd.DataFrame]] = None,
+    ) -> dict:
         cfg = self.cfg
-        env = TradingEnv(df, cfg=cfg.env_cfg)
+        frames = list(df) if isinstance(df, Sequence) and not isinstance(df, pd.DataFrame) else [df]
+        envs = [TradingEnv(frame, cfg=cfg.env_cfg) for frame in frames]
+        val_envs: list[TradingEnv] = []
+        if val_df is not None:
+            val_frames = list(val_df) if isinstance(val_df, Sequence) and not isinstance(val_df, pd.DataFrame) else [val_df]
+            val_envs = [TradingEnv(frame, cfg=cfg.env_cfg) for frame in val_frames]
         history: list[dict] = []
         timer = Timer()
-        for it in range(cfg.n_iterations):
+        for it in range(self._iteration, cfg.n_iterations):
+            is_best = False
             timer.start()
-            buf, rollout_stats = self._collect_rollout(env)
-            stacked = buf.stack_tensors()
-            ep_returns_np = _per_episode_returns(stacked["reward"], stacked["done"])
+            buf, rollout_stats = self._collect_rollout(envs)
+            ep_returns_np = np.asarray(rollout_stats["ep_equity_returns"], dtype=np.float32)
             cvar_value = cvar_numpy(ep_returns_np, cfg.cvar_alpha)
             violation = max(0.0, -cvar_value - cfg.cvar_threshold)
             mean_ep_return = float(np.mean(rollout_stats["ep_returns"])) if rollout_stats["ep_returns"] else 0.0
             mean_ep_return = float(np.clip(mean_ep_return, -1e6, 1e6))
             if it >= cfg.cvar_warmup_iters:
+                signed_violation = -cvar_value - cfg.cvar_threshold
                 self.lambda_cvar = float(np.clip(
-                    self.lambda_cvar + cfg.cvar_lambda_lr * violation,
+                    self.lambda_cvar + cfg.cvar_lambda_lr * signed_violation,
                     0.0, cfg.cvar_lambda_max,
                 ))
             ep_returns_t = torch.from_numpy(ep_returns_np).to(self.device)
@@ -278,6 +319,8 @@ class CVaRPPOTrainer(PPOTrainer):
                 "n_episodes": len(rollout_stats["ep_returns"]),
                 "rollout_steps": len(buf),
                 "mean_return": mean_ep_return,
+                "mean_equity_return": float(np.mean(ep_returns_np)),
+                "mean_max_drawdown": float(np.mean(rollout_stats["ep_max_drawdowns"])),
                 "cvar": float(cvar_value),
                 "cvar_violation": float(violation),
                 "lambda_cvar": float(self.lambda_cvar),
@@ -288,14 +331,45 @@ class CVaRPPOTrainer(PPOTrainer):
                 "cvar_penalty": losses.get("cvar_penalty", 0.0),
                 "elapsed_s": timer.elapsed,
             }
+            if val_envs and cfg.eval_every_iterations > 0 and (it + 1) % cfg.eval_every_iterations == 0:
+                entry["val"] = self._evaluate_policy(
+                    val_envs, cfg.eval_episodes, cfg.seed + 100_000,
+                    cvar_alpha=cfg.cvar_alpha,
+                )
+                val_cvar = entry["val"]["cvar"]
+                val_feasible = val_cvar >= -cfg.cvar_threshold
+                val_score = (
+                    entry["val"]["mean_equity_return"] if val_feasible else val_cvar
+                )
+                improved = (
+                    (val_feasible and not self._best_val_feasible)
+                    or (
+                        val_feasible == self._best_val_feasible
+                        and val_score > self._best_val_score + cfg.early_stopping_min_delta
+                    )
+                )
+                entry["val"]["constraint_feasible"] = val_feasible
+                entry["val"]["selection_score"] = val_score
+                if improved:
+                    self._best_val_feasible = val_feasible
+                    self._best_val_score = val_score
+                    self._bad_evals = 0
+                    is_best = True
+                else:
+                    self._bad_evals += 1
             history.append(entry)
             self.cvar_history.append(entry)
+            self._iteration = it + 1
+            if val_envs and is_best and cfg.best_checkpoint:
+                self.save(cfg.best_checkpoint)
             if (it + 1) % cfg.log_every == 0:
                 logger.info(
-                    "cvar-ppo it=%d episodes=%d steps=%d mean_return=%.4f "
-                    "cvar=%.4f violation=%.4f lambda=%.4f policy=%.4f value=%.4f ent=%.4f total=%.4f",
+                    "cvar-ppo it=%d episodes=%d steps=%d shaped_return=%.4f "
+                    "equity_return=%.5f max_dd=%.5f cvar=%.5f violation=%.5f "
+                    "lambda=%.4f policy=%.4f value=%.4f ent=%.4f total=%.4f",
                     it, len(rollout_stats["ep_returns"]), len(buf),
-                    mean_ep_return, cvar_value, violation, self.lambda_cvar,
+                    mean_ep_return, entry["mean_equity_return"], entry["mean_max_drawdown"],
+                    cvar_value, violation, self.lambda_cvar,
                     losses["policy"], losses["value"],
                     losses["entropy"], losses["total"],
                 )
@@ -303,6 +377,22 @@ class CVaRPPOTrainer(PPOTrainer):
                     inter_path = str(cfg.checkpoint).replace(".pt", f"_iter_{it+1}.pt")
                     self.save(inter_path)
             timer.reset()
+            if cfg.checkpoint_every_iterations > 0 and (it + 1) % cfg.checkpoint_every_iterations == 0:
+                checkpoint = Path(cfg.checkpoint or "artifacts/s4_cvar/model.pt")
+                self.save(str(checkpoint.with_name(f"{checkpoint.stem}_iter{it + 1}{checkpoint.suffix}")))
+            should_stop = (
+                bool(val_envs)
+                and cfg.early_stopping_patience > 0
+                and self._bad_evals >= cfg.early_stopping_patience
+            )
+            del buf, rollout_stats, ep_returns_t
+            _release_rollout_memory()
+            if should_stop:
+                logger.info(
+                    "cvar-ppo early stopping at iteration %d; feasible=%s best_val_score=%.6f",
+                    it, self._best_val_feasible, self._best_val_score,
+                )
+                break
         if cfg.checkpoint:
             self.save(cfg.checkpoint)
         return {"history": history, "cvar_history": list(self.cvar_history)}
@@ -313,11 +403,22 @@ class CVaRPPOTrainer(PPOTrainer):
         cfg_dict = self.model.cfg.__dict__.copy()
         if "vision_channels" in cfg_dict and isinstance(cfg_dict["vision_channels"], tuple):
             cfg_dict["vision_channels"] = list(cfg_dict["vision_channels"])
-        torch.save({
+        payload = {
             "model": self.model.state_dict(),
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "ppo_config": self.cfg.__dict__,
+            "optimizer": self.opt.state_dict(),
+            "trainer_state": {
+                "step": self._step,
+                "iteration": self._iteration,
+                "best_val_score": self._best_val_score,
+                "best_val_feasible": self._best_val_feasible,
+                "bad_evals": self._bad_evals,
+                "numpy_rng_state": self._rng.bit_generator.state,
+                "torch_rng_state": torch.get_rng_state(),
+                "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
             "lambda_cvar": self.lambda_cvar,
             "cvar_history": self.cvar_history,
             "checkpoint_meta": {
@@ -325,13 +426,53 @@ class CVaRPPOTrainer(PPOTrainer):
                 "trading_policy_ready": True,
                 "policy_head_trained": True,
                 "policy_training": "cvar_constrained_ppo",
+                "source_checkpoint": self.cfg.source_checkpoint,
+                "dataset": {
+                    "root": self.cfg.dataset_root,
+                    "manifest_checksum": self.cfg.dataset_manifest_checksum,
+                },
             },
-        }, p)
+        }
+        tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}")
+        try:
+            torch.save(payload, tmp)
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
         logger.info("cvar-ppo checkpoint saved to %s", p)
+
+    def load(self, path: str) -> dict:
+        payload = torch.load(path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(payload["model"])
+        if payload.get("optimizer"):
+            self.opt.load_state_dict(payload["optimizer"])
+        state = payload.get("trainer_state") or {}
+        self._step = int(state.get("step", 0))
+        self._iteration = int(state.get("iteration", 0))
+        self._best_val_score = float(
+            state.get("best_val_score", state.get("best_val_cvar", float("-inf")))
+        )
+        self._best_val_feasible = bool(state.get("best_val_feasible", False))
+        self._bad_evals = int(state.get("bad_evals", 0))
+        if state.get("numpy_rng_state"):
+            self._rng.bit_generator.state = state["numpy_rng_state"]
+        if state.get("torch_rng_state") is not None:
+            torch.set_rng_state(state["torch_rng_state"].cpu())
+        if torch.cuda.is_available() and state.get("cuda_rng_state") is not None:
+            torch.cuda.set_rng_state_all([item.cpu() for item in state["cuda_rng_state"]])
+        self.lambda_cvar = float(payload.get("lambda_cvar", self.lambda_cvar))
+        self.cvar_history = list(payload.get("cvar_history", []))
+        return {
+            "step": self._step,
+            "iteration": self._iteration,
+            "lambda_cvar": self.lambda_cvar,
+        }
 
 
 __all__ = [
     "CVaRPPOConfig",
     "CVaRPPOTrainer",
     "_per_episode_returns",
+    "_tail_loss_excess",
 ]

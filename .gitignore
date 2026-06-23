@@ -62,3 +62,4 @@ secrets.*
 .pytest_full.log.err
 .pytest_full.log.out
 backtest_comparison.csv
+*.tar.gz

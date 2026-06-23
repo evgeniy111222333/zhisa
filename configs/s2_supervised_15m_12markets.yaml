@@ -1,0 +1,55 @@
+# S2 market-head training after the 1h -> 15m S1 curriculum.
+seed: 0
+device: cuda
+epochs: 12
+batch_size: 256
+workers: 4
+
+# Kept identical to the serious S1 checkpoint contract. When an S1
+# checkpoint is supplied, train_s2 also verifies these values from it.
+chart_window: 128
+image_size: 128
+horizons: [4, 16, 64]
+n_regime_states: 4
+
+freeze_encoder_epochs: 1
+encoder_lr_scale: 0.25
+early_stopping_patience: 2
+early_stopping_min_delta: 0.001
+class_balance: sqrt_inverse
+label_smoothing: 0.03
+grad_clip: 1.0
+log_every: 50
+eval_every: 1
+val_max_batches: 0
+champion_metric: s2_composite_score
+champion_mode: max
+# Epoch checkpoints preserve exact shuffle/scheduler semantics on resume.
+checkpoint_every_steps: 0
+
+targets:
+  direction_mode: forward_return
+  flat_return_bps: 1.0
+  use_log_return: false
+  triple_barrier:
+    tp_atr_mult: 2.0
+    sl_atr_mult: 2.0
+    max_holding: 32
+    atr_window: 14
+
+optim:
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_steps: 1000
+  t_max: 78000
+
+loss_weights:
+  direction: 1.0
+  volatility: 0.5
+  regime: 0.3
+  return_pred: 0.5
+  risk: 0.25
+  policy: 0.0
+  value: 0.5
+  uncertainty: 0.05

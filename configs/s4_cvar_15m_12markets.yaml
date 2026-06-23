@@ -1,0 +1,61 @@
+# Main risk-aware S4 run. CVaR is measured on financial episode returns,
+# while PPO advantages use the explicitly configured shaped reward.
+seed: 20260622
+device: cuda
+n_iterations: 100
+n_episodes: 48
+max_steps_per_episode: 512
+n_epochs: 4
+minibatch_size: 512
+clip_ratio: 0.15
+value_coef: 0.5
+value_loss_scale: 100.0
+entropy_coef: 0.005
+gamma: 0.997
+gae_lambda: 0.95
+grad_clip: 0.5
+target_kl: 0.015
+log_every: 1
+checkpoint_every_iterations: 5
+eval_every_iterations: 5
+# Ten fixed starts per market on the canonical 12-market validation split.
+# At alpha=0.10 this gives 12 observations in the validation tail.
+eval_episodes: 120
+early_stopping_patience: 5
+early_stopping_min_delta: 0.00025
+optim:
+  lr: 0.00003
+  weight_decay: 0.0001
+cvar_alpha: 0.10
+cvar_threshold: 0.02
+cvar_lambda_init: 0.0
+cvar_lambda_lr: 2.0
+cvar_lambda_max: 10.0
+cvar_warmup_iters: 6
+env_cfg:
+  initial_equity: 1.0
+  fee_bps: 4.0
+  slippage_bps_per_unit: 1.5
+  market_depth_units: 100.0
+  max_leverage: 1.0
+  max_position: 1.0
+  episode_length: 512
+  random_start: true
+  prefetch_charts: false
+  kill_on_drawdown: true
+  conservative_bar_fill: true
+  liquidate_on_episode_end: true
+  funding_rate: 0.0
+  funding_interval: 0
+  funding_column: ""
+  risk_limits:
+    max_drawdown: 0.12
+  reward_weights:
+    pnl: 1.0
+    drawdown: 0.02
+    turnover: 0.001
+    sharpe_bonus: 0.0
+    liquidation_penalty: 5.0
+    slippage_penalty: 0.5
+    survival_bonus: 0.0
+    cvar_penalty: 0.0

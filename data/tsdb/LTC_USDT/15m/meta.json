@@ -1,0 +1,18 @@
+{
+  "instrument": "LTC/USDT",
+  "timeframe": "15m",
+  "start": "2020-10-01T00:00:00+00:00",
+  "end": "2026-06-20T18:30:00+00:00",
+  "row_count": 200429,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 5126702,
+  "checksum": "988dacdc4cfdd90541669335c9a47a43",
+  "created_at": "2026-06-20T19:00:50.673415+00:00",
+  "updated_at": "2026-06-20T19:00:50.673415+00:00"
+}

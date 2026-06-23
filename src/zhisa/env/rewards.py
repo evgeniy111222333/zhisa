@@ -76,7 +76,9 @@ def compute_reward(
         std = arr.std(ddof=1) if arr.size > 1 else 0.0
         sharpe = (arr.mean() / (std + 1e-9)) * np.sqrt(252.0)
 
-    turnover_term = abs(new_position - state.last_position) * turnover
+    # ``turnover`` is already executed notional divided by equity. Multiplying
+    # it by the position delta again would square the size of partial trades.
+    turnover_term = abs(turnover)
     slip_term = (slippage_bps / 1e4) * w.slippage_penalty
 
     reward = (

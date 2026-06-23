@@ -26,6 +26,7 @@ Performance design (revised):
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Sequence
@@ -36,14 +37,16 @@ import torch
 from torch.utils.data import Dataset
 
 from zhisa.data.labeling import (
+    ForwardReturnConfig,
     TripleBarrierConfig,
+    forward_return_targets,
     hmm_regime_labels,
     realized_volatility,
     triple_barrier,
 )
 from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
 from zhisa.features.time import compute_time_features
-from zhisa.rendering.chart_renderer import render_chart
+from zhisa.rendering.chart_renderer import render_chart, render_chart_array
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -61,6 +64,15 @@ class SampleSpec:
     include_volume: bool = True
     include_indicators: bool = True
     n_regime_states: int = 4
+
+
+@dataclass
+class MarketTargetConfig:
+    """Label contract for supervised market-head training."""
+
+    direction_mode: str = "forward_return"
+    flat_return_bps: float = 1.0
+    use_log_return: bool = False
 
 
 @dataclass
@@ -89,7 +101,8 @@ class MarketDataset(Dataset):
     spec : SampleSpec, optional
         Description of the sample shape.
     triple_barrier_cfg : TripleBarrierConfig, optional
-        Configuration for the primary triple-barrier labelling.
+        Configuration for explicit ``direction_mode="triple_barrier"``
+        legacy labelling and for callers that still inspect ``_tb_cfg_primary``.
     cache_charts : bool, default ``True``
         When true, all chart images are rendered once in ``__init__`` and
         stored in a single ``(N, 3, H, W)`` float32 array. This trades
@@ -103,7 +116,8 @@ class MarketDataset(Dataset):
         only for debugging/legacy-compat.
     chart_cache_size : int, default ``0``
         When ``cache_charts`` is false, this bounds the lazy chart cache
-        to the last N entries (LRU). ``0`` means unbounded (legacy).
+        to the last N entries (LRU). ``0`` means unbounded (legacy), while
+        a negative value disables the lazy cache entirely.
 
     Notes
     -----
@@ -123,9 +137,11 @@ class MarketDataset(Dataset):
         df: pd.DataFrame,
         spec: Optional[SampleSpec] = None,
         triple_barrier_cfg: Optional[TripleBarrierConfig] = None,
+        target_cfg: Optional[MarketTargetConfig] = None,
         cache_charts: bool = True,
         precompute: bool = True,
         chart_cache_size: int = 0,
+        compute_targets: bool = True,
     ) -> None:
         spec = spec or SampleSpec()
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -133,11 +149,24 @@ class MarketDataset(Dataset):
         if len(df) < spec.chart_window + 2:
             raise ValueError("df is too short for the requested window")
         self.df = df
+        self._ohlcv_arr = np.ascontiguousarray(
+            df[["open", "high", "low", "close", "volume"]].to_numpy(
+                dtype=np.float64
+            )
+        )
+        self._fast_render = os.environ.get("ZHISA_FAST_RENDER", "0") == "1"
         self.spec = spec
         self.tb_cfg = triple_barrier_cfg or TripleBarrierConfig()
+        self.target_cfg = target_cfg or MarketTargetConfig()
+        if self.target_cfg.direction_mode not in {"forward_return", "triple_barrier"}:
+            raise ValueError(
+                "direction_mode must be 'forward_return' or 'triple_barrier', "
+                f"got {self.target_cfg.direction_mode!r}"
+            )
         self._cache_charts = bool(cache_charts)
         self._precompute = bool(precompute)
         self._chart_cache_size = int(chart_cache_size)
+        self._compute_targets = bool(compute_targets)
 
         logger.info(f"MarketDataset Init: Processing {len(df)} bars. Step 1/5: Computing OHLCV features...")
         self._features_df = compute_ohlcv_features(
@@ -146,6 +175,9 @@ class MarketDataset(Dataset):
 
         logger.info("MarketDataset Init: Step 2/5: Computing Time embeddings...")
         self._time_features_df = compute_time_features(df)
+        # Backward-compatible aliases used by existing training scripts and probes.
+        self._features = self._features_df
+        self._time_features = self._time_features_df
 
         # Primary triple-barrier at smallest horizon; use horizon 16 by default
         primary = spec.horizons[len(spec.horizons) // 2] if spec.horizons else 16
@@ -156,16 +188,33 @@ class MarketDataset(Dataset):
             atr_window=self.tb_cfg.atr_window,
         )
 
-        logger.info("MarketDataset Init: Step 3/5: Computing Triple Barrier Labels (Returns/Directions)...")
-        self._tb_df = triple_barrier(df, self._tb_cfg_primary)
+        if self._compute_targets:
+            if self.target_cfg.direction_mode == "forward_return":
+                logger.info("MarketDataset Init: Step 3/5: Computing Forward Return Labels (Returns/Directions)...")
+                self._tb_df = forward_return_targets(
+                    df,
+                    ForwardReturnConfig(
+                        horizon=primary,
+                        flat_return_bps=self.target_cfg.flat_return_bps,
+                        log_return=self.target_cfg.use_log_return,
+                    ),
+                )
+            else:
+                logger.info("MarketDataset Init: Step 3/5: Computing Triple Barrier Labels (Returns/Directions)...")
+                self._tb_df = triple_barrier(df, self._tb_cfg_primary)
 
-        logger.info("MarketDataset Init: Step 4/5: Computing Realized Volatility...")
-        self._vol_series = realized_volatility(df, horizon=primary)
+            logger.info("MarketDataset Init: Step 4/5: Computing Realized Volatility...")
+            self._vol_series = realized_volatility(df, horizon=primary)
 
-        logger.info("MarketDataset Init: Step 5/5: Computing HMM Regime Labels (Macro States)...")
-        self._regime_series = hmm_regime_labels(
-            df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=True
-        )
+            logger.info("MarketDataset Init: Step 5/5: Computing HMM Regime Labels (Macro States)...")
+            self._regime_series = hmm_regime_labels(
+                df, n_states=spec.n_regime_states, lookback=256, prefer_sklearn=True
+            )
+        else:
+            logger.info("MarketDataset Init: Steps 3-5 skipped (compute_targets=False). Using dummy labels.")
+            self._tb_df = pd.DataFrame({"label": np.zeros(len(df), dtype=np.int64), "ret": np.zeros(len(df), dtype=np.float32)}, index=df.index)
+            self._vol_series = pd.Series(np.zeros(len(df), dtype=np.float32), index=df.index)
+            self._regime_series = pd.Series(np.zeros(len(df), dtype=np.int64), index=df.index)
 
         # ---- Effective length (mirrors the original __len__ logic) ----
         self._horizon_max = max(self.spec.horizons) if self.spec.horizons else 0
@@ -239,8 +288,13 @@ class MarketDataset(Dataset):
             if t > 0 and t % 50000 == 0:
                 elapsed = time.time() - start_time
                 logger.info(f"MarketDataset Init: Rendered {t}/{N} charts ({t/N*100:.1f}%) in {elapsed:.1f}s...")
-            window_df = df.iloc[t : t + W]
-            img = render_chart(window_df, size=self.spec.image_size)
+            if self._fast_render:
+                img = render_chart_array(
+                    self._ohlcv_arr[t : t + W], size=self.spec.image_size
+                )
+            else:
+                window_df = df.iloc[t : t + W]
+                img = render_chart(window_df, size=self.spec.image_size)
             # img is a (3, H, W) float32 tensor
             if isinstance(img, torch.Tensor):
                 arr = img.detach().cpu().numpy()
@@ -260,14 +314,21 @@ class MarketDataset(Dataset):
             return torch.from_numpy(self._chart_arr[t])
         # Lazy / LRU path
         cache = self._chart_cache
-        if t in cache:
+        if self._chart_cache_size >= 0 and t in cache:
             if self._chart_cache_size > 0:
                 cache.move_to_end(t)
             return cache[t]
         start = t
         end = t + self.spec.chart_window
-        window_df = self.df.iloc[start:end]
-        img = render_chart(window_df, size=self.spec.image_size)
+        if self._fast_render:
+            img = render_chart_array(
+                self._ohlcv_arr[start:end], size=self.spec.image_size
+            )
+        else:
+            window_df = self.df.iloc[start:end]
+            img = render_chart(window_df, size=self.spec.image_size)
+        if self._chart_cache_size < 0:
+            return img
         if self._chart_cache_size > 0:
             cache[t] = img
             cache.move_to_end(t)

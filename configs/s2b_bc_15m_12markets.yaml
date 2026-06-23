@@ -1,0 +1,36 @@
+# Serious S2 -> S2b behavioral-cloning bridge on prepared multi-market data.
+# Supply --s2-checkpoint and --prepared-root explicitly.
+seed: 20260621
+device: cuda
+trainer: bc
+expert: triple_barrier
+chart_window: 128
+image_size: 64
+n_regime_states: 4
+batch_size: 256
+workers: 4
+grad_clip: 1.0
+log_every: 100
+bc_epochs: 4
+early_stopping_patience: 2
+early_stopping_min_delta: 0.001
+freeze_backbone_epochs: 1
+backbone_lr_scale: 0.10
+policy_class_balance: sqrt_inverse
+label_smoothing: 0.0
+optim:
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_steps: 1000
+  t_max: 30000
+loss_weights:
+  direction: 0.25
+  volatility: 0.10
+  regime: 0.10
+  return_pred: 0.20
+  policy: 1.0
+  value: 0.20
+  uncertainty: 0.05
+expert_kwargs:
+  max_holding: 16

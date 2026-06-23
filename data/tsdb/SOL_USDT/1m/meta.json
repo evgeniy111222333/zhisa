@@ -1,0 +1,18 @@
+{
+  "instrument": "SOL/USDT",
+  "timeframe": "1m",
+  "start": "2020-08-11T06:00:00+00:00",
+  "end": "2026-06-16T19:23:00+00:00",
+  "row_count": 3073760,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 68779343,
+  "checksum": "815efe6c2809305471de80fb1f9a5640",
+  "created_at": "2026-06-16T19:23:44.211905+00:00",
+  "updated_at": "2026-06-16T19:23:44.212930+00:00"
+}

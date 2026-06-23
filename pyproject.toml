@@ -68,6 +68,8 @@ zhisa-ingest-binance-futures-context = "zhisa.scripts.ingest_binance_futures_con
 zhisa-live-shadow = "zhisa.scripts.live_shadow:main"
 zhisa-monitor-real-data = "zhisa.scripts.monitor_real_data:main"
 zhisa-paper-run = "zhisa.scripts.paper_run:main"
+zhisa-prepare-s1-data = "zhisa.scripts.prepare_s1_data:main"
+zhisa-audit-model = "zhisa.scripts.audit_model:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

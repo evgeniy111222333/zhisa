@@ -146,72 +146,72 @@ def render_chart(df: pd.DataFrame, size: int = 64) -> torch.Tensor:
 def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
     """A pure-numpy candlestick renderer; an order of magnitude faster
     than matplotlib and good enough for feature extraction."""
-    if len(df) < 2:
+    values = df[["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=np.float64, copy=False
+    )
+    return _fast_render_ohlcv(values, size)
+
+
+def render_chart_array(ohlcv: np.ndarray, size: int = 64) -> torch.Tensor:
+    """Render a contiguous ``(N, 5)`` OHLCV array without pandas overhead."""
+    rgb = _fast_render_ohlcv(ohlcv, size)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float()
+
+
+def _fast_render_ohlcv(ohlcv: np.ndarray, size: int) -> np.ndarray:
+    if len(ohlcv) < 2:
         return np.full((size, size, 3), 0.5, dtype=np.float32)
-    n = len(df)
+    values = np.asarray(ohlcv, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 5:
+        raise ValueError("ohlcv must have shape (N, >=5)")
+    n = len(values)
     rgb = np.full((size, size, 3), 0.05, dtype=np.float32)
-    
-    # OPTIMIZATION: Extract arrays ONCE to avoid 40 million Pandas .iloc calls
-    o_arr = df["open"].to_numpy(dtype=np.float64)
-    c_arr = df["close"].to_numpy(dtype=np.float64)
-    h_arr = df["high"].to_numpy(dtype=np.float64)
-    l_arr = df["low"].to_numpy(dtype=np.float64)
-    v_arr = df["volume"].to_numpy(dtype=np.float64)
-    
+    o_arr, h_arr, l_arr, c_arr, v_arr = values[:, :5].T
+
     lo = float(l_arr.min())
     hi = float(h_arr.max())
     rng = max(hi - lo, 1e-9)
-    # Map bars to x columns
     xs = (np.arange(n) * (size - 1) / max(n - 1, 1)).astype(int)
-    # Main price area: top 75% of rows
     price_h = int(size * 0.75)
-    # Candles
-    for i in range(n):
-        x = xs[i]
-        o, c, h, l = float(o_arr[i]), float(c_arr[i]), float(h_arr[i]), float(l_arr[i])
-        y_o = price_h - int((o - lo) / rng * (price_h - 2))
-        y_c = price_h - int((c - lo) / rng * (price_h - 2))
-        y_h = price_h - int((h - lo) / rng * (price_h - 2))
-        y_l = price_h - int((l - lo) / rng * (price_h - 2))
-        color = np.array(_GREEN if c >= o else _RED, dtype=np.float32)
-        # Wick
-        for y in range(min(y_h, y_l), max(y_h, y_l) + 1):
-            rgb[y, x] = color
-        # Body
-        for y in range(min(y_o, y_c), max(y_o, y_c) + 1):
-            rgb[y, x] = color
-    # Volume bars on bottom 25%
+
+    def price_y(values_: np.ndarray) -> np.ndarray:
+        y = price_h - ((values_ - lo) / rng * (price_h - 2)).astype(int)
+        return np.clip(y, 0, price_h - 1)
+
+    y_o, y_c = price_y(o_arr), price_y(c_arr)
+    y_h, y_l = price_y(h_arr), price_y(l_arr)
+    colors = np.where(
+        (c_arr >= o_arr)[:, None],
+        np.asarray(_GREEN, dtype=np.float32),
+        np.asarray(_RED, dtype=np.float32),
+    )
+    y_grid = np.arange(price_h)[:, None]
+    wick = (y_grid >= np.minimum(y_h, y_l)) & (y_grid <= np.maximum(y_h, y_l))
+    body = (y_grid >= np.minimum(y_o, y_c)) & (y_grid <= np.maximum(y_o, y_c))
+    py, bars = np.nonzero(wick | body)
+    rgb[py, xs[bars]] = colors[bars]
+
     vmax = max(v_arr.max(), 1e-9)
-    for i in range(n):
-        x = xs[i]
-        v = v_arr[i] / vmax
-        bar_h = int(v * (size - price_h - 1))
-        o, c = float(o_arr[i]), float(c_arr[i])
-        color = np.array(_GREEN if c >= o else _RED, dtype=np.float32)
-        for y in range(size - bar_h, size):
-            rgb[y, x] = color
-    # Two moving averages (SMA10 / SMA30) as small lines
+    bar_heights = (v_arr / vmax * (size - price_h - 1)).astype(int)
+    volume_y = np.arange(price_h, size)[:, None]
+    volume_mask = volume_y >= (size - bar_heights)[None, :]
+    vy, bars = np.nonzero(volume_mask)
+    rgb[vy + price_h, xs[bars]] = colors[bars]
+
     for p, col in ((10, np.array([0.23, 0.63, 1.0], dtype=np.float32)),
                    (30, np.array([1.0, 0.67, 0.20], dtype=np.float32))):
         if n < p:
             continue
-        # Pure numpy SMA to avoid Pandas DataFrame creation overhead
         kernel = np.ones(p) / p
         sma = np.convolve(c_arr, kernel, mode='valid')
-        # Pad beginning to match min_periods=1 behavior
         pad_len = n - len(sma)
         if pad_len > 0:
             pad = np.cumsum(c_arr[:pad_len]) / np.arange(1, pad_len + 1)
             sma = np.concatenate((pad, sma))
-            
-        ys = price_h - ((sma - lo) / rng * (price_h - 2)).astype(int)
-        for i in range(n - 1):
-            cv = np.clip(ys[i], 0, price_h - 1)
-            nv = np.clip(ys[i + 1], 0, price_h - 1)
-            x1, x2 = xs[i], xs[i + 1]
-            for x in range(x1, x2 + 1):
-                y = int(cv + (nv - cv) * (x - x1) / max(x2 - x1, 1))
-                rgb[y, x] = col
+        ys = price_y(sma)
+        x_grid = np.arange(size)
+        line_y = np.rint(np.interp(x_grid, xs, ys)).astype(int)
+        rgb[np.clip(line_y, 0, price_h - 1), x_grid] = col
     return rgb
 
 

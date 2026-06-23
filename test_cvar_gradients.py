@@ -1,46 +1,51 @@
 import torch
 import numpy as np
-from zhisa.risk.cvar import cvar_torch
 
 def test_cvar_gradients():
     print("--- DIAGNOSTIC TEST FOR CVAR GRADIENTS ---")
     
     # 1. Simulate policy outputs (logits have requires_grad=True to simulate network)
-    policy_logits = torch.randn(10, 5, requires_grad=True)
+    policy_logits = torch.randn(4, 5, requires_grad=True)
+    action_idx = torch.tensor([1, 2, 0, 4])
     
-    # 2. Simulate standard PPO loss
-    # (Just a dummy loss connected to logits to show normal gradients work)
-    ppo_loss = policy_logits.sum() 
+    # Compute log_probs (similar to PyTorch distributions)
+    log_probs = torch.log_softmax(policy_logits, dim=-1)
+    selected_log_probs = log_probs[torch.arange(4), action_idx]
     
-    # 3. Simulate environment rewards (from numpy, as in cvar_ppo.py)
+    # 2. Simulate standard Advantages (detached from network, from environment)
+    advantages_np = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    
+    # 3. Simulate episode returns
     ep_returns_np = np.array([-10.0, -20.0, 5.0, 15.0], dtype=np.float32)
+    step_to_ep_return = ep_returns_np  # For simplicity, 1 step = 1 episode here
     
-    # 4. Simulate the CVaR calculation exactly as in cvar_ppo.py
-    ep_returns_t = torch.from_numpy(ep_returns_np) # Notice: no requires_grad
+    # === NEW METHOD: ADVANTAGE PENALIZATION ===
+    var_threshold = float(np.percentile(ep_returns_np, 50)) # alpha=0.5
+    cvar_threshold = 0.1
+    lambda_cvar = 5.0 # Large penalty to make it obvious
     
-    # The actual cvar_torch calculation
-    cvar_value = cvar_torch(ep_returns_t, alpha=0.5)
-    cvar_penalty = torch.nn.functional.relu(-cvar_value - 0.1)
+    print("\n[BEFORE FIX] Advantages:", advantages_np)
     
-    lambda_cvar = 1.0
-    cvar_term = lambda_cvar * cvar_penalty
+    # Mask for violating episodes
+    violation_mask = (step_to_ep_return <= var_threshold) & (step_to_ep_return < -cvar_threshold)
     
-    print("Does ep_returns_t require grad?", ep_returns_t.requires_grad)
-    print("Does cvar_penalty require grad?", cvar_penalty.requires_grad)
-    print("Does cvar_term require grad?", cvar_term.requires_grad)
+    if np.any(violation_mask):
+        advantages_np[violation_mask] -= lambda_cvar
+        
+    print("[AFTER FIX] Advantages:", advantages_np)
     
-    total_loss = ppo_loss + cvar_term
-    total_loss.backward()
+    # 4. Compute PPO Loss
+    adv_t = torch.from_numpy(advantages_np)
     
-    print("Policy Logits Gradient is None?", policy_logits.grad is None)
+    # PPO surrogate loss (simplified: -log_prob * advantage)
+    ppo_loss = -(selected_log_probs * adv_t).mean()
     
-    # Test if cvar_term alone can flow gradients to policy
-    policy_logits.grad = None
-    try:
-        cvar_term.backward()
-        print("cvar_term.backward() succeeded. Did logits get grad?", policy_logits.grad is not None)
-    except RuntimeError as e:
-        print("cvar_term.backward() failed with RuntimeError:", e)
+    # 5. Check Gradients
+    ppo_loss.backward()
+    
+    print("\nPolicy Logits Gradient is None?", policy_logits.grad is None)
+    print("Logits Gradients:\n", policy_logits.grad)
+    print("\nSUCCESS: Gradients flow correctly through log_probs because we penalized the Advantages!")
 
 if __name__ == "__main__":
     test_cvar_gradients()

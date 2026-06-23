@@ -27,11 +27,11 @@ log_every: 1
 
 # CVaR constraint
 cvar_alpha: 0.1            # tail level (worst 10%)
-cvar_threshold: 0.1        # max acceptable loss
+cvar_threshold: 0.02       # max acceptable financial tail loss (2% equity)
 cvar_lambda_init: 0.0      # start with no penalty
 cvar_lambda_lr: 0.05       # dual ascent learning rate
 cvar_lambda_max: 100.0     # cap to prevent runaway
-cvar_warmup_iters: 0       # iterations before lambda starts updating
+cvar_warmup_iters: 2       # iterations before lambda starts updating
 
 env_cfg:
   episode_length: 200

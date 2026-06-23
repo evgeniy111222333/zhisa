@@ -6,8 +6,9 @@ market data so that the S2 supervised trainer starts from a richer
 initialisation. Four complementary objectives are combined:
 
 1. **Temporal contrastive (CPC-style).**  The model encodes the current
-   market state into ``z_t``. The next-bar state is encoded by an
-   exponential moving average (EMA) teacher into ``z_{t+1}``. We
+   market state into ``z_t`` and predicts the projected next state. The
+   next-bar state is encoded by an exponential moving average (EMA)
+   teacher into ``z_{t+1}``. We
    maximise the cosine similarity of matched (t, t+1) pairs against
    the rest of the in-batch negatives via InfoNCE.
 2. **Masked numeric modeling.**  A random fraction of the numeric
@@ -27,19 +28,20 @@ directly.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 import os
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
-from zhisa.data.dataset import MarketDataset, multimodal_collate
+from zhisa.data.dataset import multimodal_collate
 from zhisa.models.policy import PolicyNetwork
 from zhisa.utils.logging import get_logger
 from zhisa.utils.timing import Timer
@@ -74,10 +76,67 @@ class SSLConfig:
     lr: float = 3e-4
     weight_decay: float = 1e-4
     warmup_steps: int = 100
+    temporal_horizon: int = 1
+    val_max_batches: int = 32
+    checkpoint_every_steps: int = 500
+    best_checkpoint: Optional[str] = None
+    dataset_root: Optional[str] = None
+    dataset_timeframe: Optional[str] = None
+    dataset_manifest_checksum: Optional[str] = None
     use_ema_teacher: bool = True
     use_masked_modeling: bool = True
     use_temporal_contrast: bool = True
     use_cross_modal: bool = True
+
+
+class TemporalPairDataset(Dataset):
+    """Expose causal ``(sample[t], sample[t+horizon])`` pairs.
+
+    A ``ConcatDataset`` is handled component-by-component so a pair can never
+    cross from the end of one instrument into the start of another.
+    """
+
+    def __init__(self, dataset: Dataset, horizon: int = 1) -> None:
+        if horizon < 1:
+            raise ValueError("temporal horizon must be >= 1")
+        self.horizon = int(horizon)
+        self.datasets = (
+            list(dataset.datasets) if isinstance(dataset, ConcatDataset) else [dataset]
+        )
+        self.lengths = [max(0, len(ds) - self.horizon) for ds in self.datasets]
+        total = 0
+        self.cumulative_sizes: list[int] = []
+        for length in self.lengths:
+            total += length
+            self.cumulative_sizes.append(total)
+
+    def __len__(self) -> int:
+        return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
+
+    def __getitem__(self, index: int):
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        dataset_idx = bisect_right(self.cumulative_sizes, index)
+        previous = self.cumulative_sizes[dataset_idx - 1] if dataset_idx > 0 else 0
+        local_idx = index - previous
+        dataset = self.datasets[dataset_idx]
+        return dataset[local_idx], dataset[local_idx + self.horizon]
+
+
+def temporal_pair_collate(batch) -> dict:
+    current, future = zip(*batch)
+    current_batch = multimodal_collate(current)
+    future_batch = multimodal_collate(future)
+    return {
+        "chart": current_batch.chart,
+        "numeric": current_batch.numeric,
+        "context": current_batch.context,
+        "future_chart": future_batch.chart,
+        "future_numeric": future_batch.numeric,
+        "future_context": future_batch.context,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +318,11 @@ class SSLPretrainer:
 
         # Three projection heads feeding the three InfoNCE losses.
         self.proj_temporal = _ProjectionHead(D, self.cfg.hidden_dim, self.cfg.projection_dim)
+        self.temporal_predictor = _ProjectionHead(
+            self.cfg.projection_dim,
+            self.cfg.hidden_dim,
+            self.cfg.projection_dim,
+        )
         self.proj_vision = _ProjectionHead(D, self.cfg.hidden_dim, self.cfg.projection_dim)
         self.proj_numeric = _ProjectionHead(D, self.cfg.hidden_dim, self.cfg.projection_dim)
 
@@ -270,9 +334,18 @@ class SSLPretrainer:
         )
 
         self.proj_temporal.to(self.device)
+        self.temporal_predictor.to(self.device)
         self.proj_vision.to(self.device)
         self.proj_numeric.to(self.device)
         self.reconstructor.to(self.device)
+
+        # The temporal target projection must move with the EMA teacher, not
+        # with the student optimizer. Otherwise the supposedly stable target
+        # changes immediately after every student update.
+        self.target_proj_temporal = deepcopy(self.proj_temporal).to(self.device)
+        for p in self.target_proj_temporal.parameters():
+            p.requires_grad_(False)
+        self.target_proj_temporal.eval()
 
         # EMA teacher.
         self.teacher: Optional[EMATeacher] = None
@@ -284,6 +357,7 @@ class SSLPretrainer:
         params = (
             list(model.parameters())
             + list(self.proj_temporal.parameters())
+            + list(self.temporal_predictor.parameters())
             + list(self.proj_vision.parameters())
             + list(self.proj_numeric.parameters())
             + list(self.reconstructor.parameters())
@@ -292,6 +366,9 @@ class SSLPretrainer:
             params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay
         )
         self._step = 0
+        self._completed_epochs = 0
+        self._history: list[dict] = []
+        self._best_val_total = float("inf")
 
     # ------------------------------------------------------------------
     # Single-batch loss
@@ -308,12 +385,23 @@ class SSLPretrainer:
         if self.cfg.use_temporal_contrast:
             assert self.teacher is not None, "temporal contrast requires EMA teacher"
             z_t = self.model.encode(chart, numeric, context)
+            future_chart = batch.get("future_chart", chart).to(
+                self.device, non_blocking=True
+            )
+            future_numeric = batch.get("future_numeric", numeric).to(
+                self.device, non_blocking=True
+            )
+            future_context = batch.get("future_context", context).to(
+                self.device, non_blocking=True
+            )
             with torch.no_grad():
-                z_tp1 = self.teacher.teacher.encode(chart, numeric, context).detach()
+                z_tp1 = self.teacher.teacher.encode(
+                    future_chart, future_numeric, future_context
+                ).detach()
             # Project both sides to the common contrast space.
-            p_t = self.proj_temporal(z_t)
+            p_t = self.temporal_predictor(self.proj_temporal(z_t))
             with torch.no_grad():
-                p_tp1 = self.proj_temporal(z_tp1).detach()
+                p_tp1 = self.target_proj_temporal(z_tp1).detach()
             losses["temporal"] = info_nce(p_t, p_tp1, self.cfg.temperature)
 
         # --- 2) Cross-modal alignment ------------------------------------
@@ -345,6 +433,11 @@ class SSLPretrainer:
     def step(self, batch: dict) -> dict:
         """Run one optimisation step on a single batch."""
         self.model.train()
+        lr_scale = 1.0
+        if self.cfg.warmup_steps > 0:
+            lr_scale = min(1.0, float(self._step + 1) / self.cfg.warmup_steps)
+        for group in self.opt.param_groups:
+            group["lr"] = self.cfg.lr * lr_scale
         losses = self._loss(batch)
         loss = losses["total"]
         do_update = bool(loss.requires_grad) and bool(torch.isfinite(loss))
@@ -357,6 +450,7 @@ class SSLPretrainer:
             all_params = (
                 list(self.model.parameters())
                 + list(self.proj_temporal.parameters())
+                + list(self.temporal_predictor.parameters())
                 + list(self.proj_vision.parameters())
                 + list(self.proj_numeric.parameters())
                 + list(self.reconstructor.parameters())
@@ -367,6 +461,13 @@ class SSLPretrainer:
             logger.warning("ssl step %d: non-finite/no-grad loss, skipping update", self._step)
         if self.teacher is not None:
             self.teacher.update(self.model)
+            decay = self.teacher.decay
+            with torch.no_grad():
+                for target, student in zip(
+                    self.target_proj_temporal.parameters(),
+                    self.proj_temporal.parameters(),
+                ):
+                    target.mul_(decay).add_(student.detach(), alpha=1.0 - decay)
         self._step += 1
         # Replace any non-finite values with 0.0 for clean averaging.
         return {
@@ -378,23 +479,80 @@ class SSLPretrainer:
     # Full training loop
     # ------------------------------------------------------------------
 
-    def fit(self, train_ds: MarketDataset) -> dict:
-        cfg = self.cfg
-        use_cuda = isinstance(self.device, torch.device) and self.device.type == "cuda" \
-            or (isinstance(self.device, str) and self.device.startswith("cuda"))
-        loader = DataLoader(
-            train_ds,
-            batch_size=cfg.batch_size,
-            shuffle=True,
-            num_workers=int(os.environ.get("ZHISA_SSL_WORKERS", "0")),
-            collate_fn=multimodal_collate,
-            drop_last=True,
+    def _paired_dataset(self, dataset: Dataset) -> Dataset:
+        if self.cfg.use_temporal_contrast:
+            return TemporalPairDataset(dataset, horizon=self.cfg.temporal_horizon)
+        return dataset
+
+    def _loader(
+        self,
+        dataset: Dataset,
+        *,
+        shuffle: bool,
+        epoch: Optional[int] = None,
+    ) -> DataLoader:
+        source = self._paired_dataset(dataset)
+        if len(source) == 0:
+            raise ValueError("S1 dataset has no temporal pairs after window/horizon trimming")
+        use_cuda = self.device.type == "cuda"
+        workers = int(os.environ.get("ZHISA_SSL_WORKERS", "0"))
+        generator = None
+        if shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(self.cfg.seed + int(epoch or 0))
+        return DataLoader(
+            source,
+            batch_size=self.cfg.batch_size,
+            shuffle=shuffle,
+            num_workers=workers,
+            collate_fn=(
+                temporal_pair_collate
+                if self.cfg.use_temporal_contrast
+                else multimodal_collate
+            ),
+            drop_last=shuffle and len(source) >= self.cfg.batch_size,
             pin_memory=use_cuda,
-            persistent_workers=int(os.environ.get("ZHISA_SSL_WORKERS", "0")) > 0,
+            persistent_workers=workers > 0,
+            generator=generator,
         )
+
+    @torch.no_grad()
+    def evaluate(self, dataset: Dataset) -> dict:
+        # Sequential adjacent windows are almost identical and become false
+        # negatives for one another. A fixed random order measures the same
+        # objective without this ordering artefact and remains reproducible.
+        loader = self._loader(dataset, shuffle=True, epoch=10_000)
+        self.model.eval()
+        if self.teacher is not None:
+            self.teacher.teacher.eval()
+        totals: dict[str, float] = {}
+        count = 0
+        max_batches = int(self.cfg.val_max_batches)
+        devices = [self.device.index or 0] if self.device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            torch.manual_seed(self.cfg.seed + 10_000)
+            for batch_idx, batch in enumerate(loader):
+                if max_batches > 0 and batch_idx >= max_batches:
+                    break
+                batch_d = self._to_device(batch)
+                losses = self._loss(batch_d)
+                bs = batch_d["chart"].size(0)
+                for key, value in losses.items():
+                    totals[key] = totals.get(key, 0.0) + float(value.item()) * bs
+                count += bs
+        if count == 0:
+            raise RuntimeError("S1 validation produced no batches")
+        return {key: value / count for key, value in totals.items()} | {
+            "n_samples": int(count)
+        }
+
+    def fit(self, train_ds: Dataset, val_ds: Optional[Dataset] = None) -> dict:
+        cfg = self.cfg
         history: list[dict] = []
         timer = Timer()
-        for epoch in range(cfg.epochs):
+        for _ in range(cfg.epochs):
+            epoch = self._completed_epochs
+            loader = self._loader(train_ds, shuffle=True, epoch=epoch)
             self.model.train()
             ep_agg: dict[str, float] = {}
             ep_count = 0
@@ -415,15 +573,43 @@ class SSLPretrainer:
                         " ".join(f"{k}={v:.4f}" for k, v in avg.items()),
                         lr, timer.elapsed,
                     )
+                if (
+                    cfg.checkpoint
+                    and cfg.checkpoint_every_steps > 0
+                    and self._step % cfg.checkpoint_every_steps == 0
+                ):
+                    self.save(cfg.checkpoint)
             avg = {k: v / max(1, ep_count) for k, v in ep_agg.items()}
+            if ep_count == 0:
+                raise RuntimeError("S1 epoch produced no batches")
             timer.stop()
-            history.append({"epoch": epoch, **avg, "elapsed_s": timer.elapsed})
+            record = {"epoch": epoch, **avg, "elapsed_s": timer.elapsed}
+            if val_ds is not None:
+                val_metrics = self.evaluate(val_ds)
+                record["val"] = val_metrics
+                logger.info(
+                    "ssl epoch %d validation | %s",
+                    epoch,
+                    " ".join(f"{key}={value:.4f}" for key, value in val_metrics.items() if key != "n_samples"),
+                )
+            history.append(record)
+            self._history.append(record)
+            self._completed_epochs += 1
             logger.info(
                 "ssl epoch %d done in %.1fs | %s",
                 epoch, timer.elapsed,
                 " ".join(f"{k}={v:.4f}" for k, v in avg.items()),
             )
             timer.reset()
+            score = (
+                record.get("val", {}).get("total", float("inf"))
+                if val_ds is not None
+                else record["total"]
+            )
+            if score < self._best_val_total:
+                self._best_val_total = float(score)
+                if cfg.best_checkpoint:
+                    self.save(cfg.best_checkpoint)
             if cfg.checkpoint:
                 # Save checkpoint after every epoch to prevent data loss!
                 self.save(cfg.checkpoint)
@@ -442,9 +628,12 @@ class SSLPretrainer:
         payload = {
             "model": self.model.state_dict(),
             "proj_temporal": self.proj_temporal.state_dict(),
+            "temporal_predictor": self.temporal_predictor.state_dict(),
             "proj_vision": self.proj_vision.state_dict(),
             "proj_numeric": self.proj_numeric.state_dict(),
             "reconstructor": self.reconstructor.state_dict(),
+            "target_proj_temporal": self.target_proj_temporal.state_dict(),
+            "optimizer": self.opt.state_dict(),
             "config": cfg_dict,
             "model_config": cfg_dict,  # canonical name
             "ssl_config": self.cfg.__dict__,
@@ -453,14 +642,31 @@ class SSLPretrainer:
                 "trading_policy_ready": False,
                 "policy_head_trained": False,
                 "reason": "S1 is representation pretraining; fine-tune with S2b/S4+ before paper trading.",
+                "temporal_pairing": "causal_adjacent_sample",
+                "temporal_objective": "student_predictor_to_ema_target",
+                "temporal_horizon": self.cfg.temporal_horizon,
+                "resume_granularity": "completed_epoch",
+                "dataset": {
+                    "root": self.cfg.dataset_root,
+                    "timeframe": self.cfg.dataset_timeframe,
+                    "manifest_checksum": self.cfg.dataset_manifest_checksum,
+                },
+            },
+            "trainer_state": {
+                "step": self._step,
+                "completed_epochs": self._completed_epochs,
+                "history": self._history,
+                "best_val_total": self._best_val_total,
             },
         }
         if self.teacher is not None:
             payload["teacher"] = self.teacher.state_dict()
-        torch.save(payload, p)
+        tmp = p.with_name(f".{p.name}.tmp")
+        torch.save(payload, tmp)
+        os.replace(tmp, p)
         logger.info("ssl checkpoint saved to %s", p)
 
-    def load(self, path: str) -> None:
+    def load(self, path: str, *, restore_optimizer: bool = True) -> dict:
         sd = torch.load(path, map_location=self.device, weights_only=False)
         # The saved model may have head shapes that differ from the current
         # model (e.g. n_actions, n_regime_classes). We cannot use
@@ -468,22 +674,60 @@ class SSLPretrainer:
         # raises on size mismatches; we must filter the checkpoint to
         # only contain keys with matching shapes.
         filtered_model = _filter_matching_state_dict(sd["model"], self.model)
+        model_exact = len(filtered_model) == len(sd["model"])
         self.model.load_state_dict(filtered_model, strict=False)
         self.proj_temporal.load_state_dict(sd["proj_temporal"])
+        if "temporal_predictor" in sd:
+            self.temporal_predictor.load_state_dict(sd["temporal_predictor"])
         self.proj_vision.load_state_dict(sd["proj_vision"])
         self.proj_numeric.load_state_dict(sd["proj_numeric"])
         self.reconstructor.load_state_dict(sd["reconstructor"])
+        if "target_proj_temporal" in sd:
+            self.target_proj_temporal.load_state_dict(sd["target_proj_temporal"])
+        else:
+            self.target_proj_temporal.load_state_dict(self.proj_temporal.state_dict())
         if self.teacher is not None and "teacher" in sd:
             filtered_teacher = _filter_matching_state_dict(
                 sd["teacher"]["teacher"], self.teacher.teacher
             )
             self.teacher.teacher.load_state_dict(filtered_teacher, strict=False)
 
+        optimizer_restored = False
+        if restore_optimizer and "optimizer" in sd and model_exact:
+            try:
+                self.opt.load_state_dict(sd["optimizer"])
+                optimizer_restored = True
+            except (ValueError, RuntimeError) as exc:
+                logger.warning("could not restore S1 optimizer state: %s", exc)
+
+        trainer_state = sd.get("trainer_state", {}) if optimizer_restored else {}
+        self._step = int(trainer_state.get("step", 0))
+        self._completed_epochs = int(trainer_state.get("completed_epochs", 0))
+        self._history = list(trainer_state.get("history", []))
+        self._best_val_total = float(
+            trainer_state.get("best_val_total", float("inf"))
+        )
+        status = {
+            "optimizer_restored": optimizer_restored,
+            "legacy_warm_start": "trainer_state" not in sd,
+            "resume_mode": "full" if optimizer_restored else "warm_start",
+            "step": self._step,
+            "completed_epochs": self._completed_epochs,
+        }
+        logger.info("ssl checkpoint loaded from %s | %s", path, status)
+        return status
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _to_device(self, batch) -> dict:
+        if isinstance(batch, dict):
+            return {
+                key: value.to(self.device, non_blocking=True)
+                for key, value in batch.items()
+                if torch.is_tensor(value)
+            }
         return {
             "chart": batch.chart.to(self.device, non_blocking=True),
             "numeric": batch.numeric.to(self.device, non_blocking=True),
@@ -507,13 +751,31 @@ def load_pretrained_into_policy(
     """
     sd = torch.load(ssl_checkpoint, map_location="cpu", weights_only=False)
     enc_sd = sd["model"] if "model" in sd else sd
-    filtered = _filter_matching_state_dict(enc_sd, policy)
-    missing, unexpected = policy.load_state_dict(filtered, strict=strict)
+    filtered = _filter_matching_state_dict(
+        enc_sd,
+        policy,
+        excluded_prefixes=("heads.", "memory."),
+    )
+    incompatible = policy.load_state_dict(filtered, strict=False)
+    if strict:
+        missing_trunk = [
+            key
+            for key in incompatible.missing_keys
+            if not key.startswith(("heads.", "memory."))
+        ]
+        if missing_trunk or incompatible.unexpected_keys:
+            raise RuntimeError(
+                "S1 representation checkpoint is not strictly compatible: "
+                f"missing={missing_trunk}, unexpected={incompatible.unexpected_keys}"
+            )
     return policy
 
 
 def _filter_matching_state_dict(
-    sd: dict, model: nn.Module
+    sd: dict,
+    model: nn.Module,
+    *,
+    excluded_prefixes: tuple[str, ...] = (),
 ) -> dict:
     """Return a state_dict containing only entries with shapes matching
     ``model``'s parameters.
@@ -528,6 +790,8 @@ def _filter_matching_state_dict(
     ref.update({k: v.shape for k, v in model.named_buffers()})
     out = {}
     for k, v in sd.items():
+        if excluded_prefixes and k.startswith(excluded_prefixes):
+            continue
         if k in ref and tuple(v.shape) == tuple(ref[k]):
             out[k] = v
     return out

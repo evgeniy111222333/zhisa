@@ -1,0 +1,18 @@
+{
+  "instrument": "BNB/USDT",
+  "timeframe": "1m",
+  "start": "2019-01-01T00:00:00+00:00",
+  "end": "2026-06-16T19:52:00+00:00",
+  "row_count": 3918202,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 98295759,
+  "checksum": "ea758550534c92491465432a677029ac",
+  "created_at": "2026-06-16T19:52:37.527060+00:00",
+  "updated_at": "2026-06-16T19:52:37.527060+00:00"
+}

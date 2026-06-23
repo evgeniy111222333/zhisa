@@ -49,10 +49,31 @@ class MultiTaskLoss(nn.Module):
         weights: Optional[LossWeights] = None,
         learnable: bool = False,
         label_smoothing: float = 0.05,
+        direction_class_weights: Optional[torch.Tensor] = None,
+        regime_class_weights: Optional[torch.Tensor] = None,
+        policy_class_weights: Optional[torch.Tensor] = None,
+        policy_focal_gamma: float = 0.0,
+        policy_direction_aux_weight: float = 0.0,
+        policy_size_aux_weight: float = 0.0,
     ) -> None:
         super().__init__()
         w = weights or LossWeights()
         self.label_smoothing = label_smoothing
+        self.policy_focal_gamma = float(policy_focal_gamma)
+        self.policy_direction_aux_weight = float(policy_direction_aux_weight)
+        self.policy_size_aux_weight = float(policy_size_aux_weight)
+        self.register_buffer(
+            "direction_class_weights",
+            None if direction_class_weights is None else direction_class_weights.float(),
+        )
+        self.register_buffer(
+            "regime_class_weights",
+            None if regime_class_weights is None else regime_class_weights.float(),
+        )
+        self.register_buffer(
+            "policy_class_weights",
+            None if policy_class_weights is None else policy_class_weights.float(),
+        )
         if learnable:
             self.log_vars = nn.ParameterDict({
                 k: nn.Parameter(torch.zeros(1)) for k in (
@@ -93,6 +114,20 @@ class MultiTaskLoss(nn.Module):
             self.register_buffer("_position_intent_w", torch.tensor(w.position_intent))
         self.weights = w
 
+    def set_policy_class_weights(self, weights: Optional[torch.Tensor]) -> None:
+        """Update policy class weights while preserving buffer semantics."""
+        if weights is None:
+            self._buffers["policy_class_weights"] = None
+            return
+        ref = next(self.parameters(), None)
+        if ref is None:
+            ref = next((buf for buf in self.buffers() if buf is not None), None)
+        device = ref.device if ref is not None else weights.device
+        self._buffers["policy_class_weights"] = weights.detach().to(
+            device=device,
+            dtype=torch.float32,
+        )
+
     def _w(self, key: str) -> torch.Tensor:
         if self.log_vars is not None:
             return torch.exp(-self.log_vars[key])
@@ -111,6 +146,7 @@ class MultiTaskLoss(nn.Module):
             tgt = torch.where(tgt == -1, torch.zeros_like(tgt), tgt + 1)
             losses["direction"] = F.cross_entropy(
                 outputs["direction"], tgt,
+                weight=self.direction_class_weights,
                 label_smoothing=self.label_smoothing,
             )
         # Volatility: regression
@@ -120,7 +156,11 @@ class MultiTaskLoss(nn.Module):
             )
         # Regime: classification
         if "regime" in outputs and "label_regime" in targets:
-            losses["regime"] = F.cross_entropy(outputs["regime"], targets["label_regime"])
+            losses["regime"] = F.cross_entropy(
+                outputs["regime"],
+                targets["label_regime"],
+                weight=self.regime_class_weights,
+            )
         # Return prediction
         if "return_pred" in outputs and "label_ret" in targets:
             losses["return_pred"] = F.smooth_l1_loss(
@@ -151,10 +191,56 @@ class MultiTaskLoss(nn.Module):
             )
         # Policy imitation: cross-entropy
         if "policy_logits" in outputs and "action" in targets:
-            losses["policy"] = F.cross_entropy(
-                outputs["policy_logits"], targets["action"],
-                label_smoothing=self.label_smoothing,
-            )
+            logits = outputs["policy_logits"]
+            action_target = targets["action"]
+            if self.policy_focal_gamma > 0:
+                ce = F.cross_entropy(
+                    logits, action_target,
+                    reduction="none",
+                )
+                target_prob = torch.softmax(logits, dim=-1).gather(
+                    1, action_target.unsqueeze(1)
+                ).squeeze(1)
+                focal_weight = (1.0 - target_prob).pow(self.policy_focal_gamma)
+                if self.policy_class_weights is not None:
+                    sample_weight = self.policy_class_weights.to(logits.device)[action_target]
+                    losses["policy"] = (
+                        sample_weight * focal_weight * ce
+                    ).sum() / sample_weight.sum().clamp_min(1e-8)
+                else:
+                    losses["policy"] = (focal_weight * ce).mean()
+            else:
+                losses["policy"] = F.cross_entropy(
+                    logits, action_target,
+                    weight=self.policy_class_weights,
+                    label_smoothing=self.label_smoothing,
+                )
+            if self.policy_direction_aux_weight > 0:
+                direction_logits = torch.stack([
+                    torch.logsumexp(logits[:, [0, 7, 8]], dim=1),
+                    torch.logsumexp(logits[:, [1, 2, 3]], dim=1),
+                    torch.logsumexp(logits[:, [4, 5, 6]], dim=1),
+                ], dim=1)
+                direction_target = torch.zeros_like(action_target)
+                direction_target[(action_target >= 1) & (action_target <= 3)] = 1
+                direction_target[(action_target >= 4) & (action_target <= 6)] = 2
+                losses["policy"] = losses["policy"] + self.policy_direction_aux_weight * F.cross_entropy(
+                    direction_logits, direction_target
+                )
+            if self.policy_size_aux_weight > 0:
+                trade = (action_target >= 1) & (action_target <= 6)
+                if trade.any():
+                    is_long = action_target[trade] <= 3
+                    trade_logits = logits[trade]
+                    size_logits = torch.where(
+                        is_long.unsqueeze(1), trade_logits[:, [1, 2, 3]], trade_logits[:, [4, 5, 6]]
+                    )
+                    size_target = torch.where(
+                        is_long, action_target[trade] - 1, action_target[trade] - 4
+                    )
+                    losses["policy"] = losses["policy"] + self.policy_size_aux_weight * F.cross_entropy(
+                        size_logits, size_target
+                    )
         # Value: regression to label_ret
         if "value" in outputs and "label_ret" in targets:
             losses["value"] = F.smooth_l1_loss(outputs["value"], targets["label_ret"])

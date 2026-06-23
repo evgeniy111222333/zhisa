@@ -18,28 +18,29 @@ def test_s4_config_loads():
     assert cfg["n_episodes"] == 4
     assert cfg["gamma"] == 0.99
     assert cfg["gae_lambda"] == 0.95
-    assert cfg["env_cfg"]["initial_cash"] == 10000.0
+    assert cfg["env_cfg"]["initial_equity"] == 1.0
     assert cfg["optim"]["lr"] == 0.0003
 
 
 def test_build_env_cfg_overrides_apply():
     from zhisa.utils.containers import Config
 
-    cfg = Config({"env_cfg": {"initial_cash": 999.0, "fee_bps": 7.5}})
+    cfg = Config({"env_cfg": {"initial_equity": 999.0, "fee_bps": 7.5}})
     env_cfg = _build_env_cfg(cfg)
     assert isinstance(env_cfg, EnvConfig)
+    assert env_cfg.initial_equity == 999.0
     # initial_cash is not a real EnvConfig field — it must be filtered
     # out. Only fee_bps should be applied.
     assert env_cfg.fee_bps == 7.5
 
 
-def test_build_env_cfg_ignores_unknown_keys():
+def test_build_env_cfg_rejects_unknown_keys():
     from zhisa.utils.containers import Config
     from zhisa.env.trading_env import EnvConfig
 
     cfg = Config({"env_cfg": {"this_does_not_exist": 42}})
-    env_cfg = _build_env_cfg(cfg)
-    assert isinstance(env_cfg, EnvConfig)
+    with pytest.raises(ValueError, match="unknown EnvConfig"):
+        _build_env_cfg(cfg)
 
 
 def test_build_env_cfg_empty_config():
@@ -58,17 +59,19 @@ def test_build_ppo_cfg_defaults():
     assert ppo_cfg.n_episodes == 4
     assert ppo_cfg.gamma == 0.99
     assert ppo_cfg.clip_ratio == 0.2
+    assert ppo_cfg.value_loss_scale == 1.0
 
 
 def test_build_ppo_cfg_cli_overrides():
     from zhisa.utils.containers import Config
 
-    cfg = Config({"n_episodes": 7, "gamma": 0.5, "clip_ratio": 0.1})
+    cfg = Config({"n_episodes": 7, "gamma": 0.5, "clip_ratio": 0.1, "value_loss_scale": 25.0})
     args = _Args(n_episodes=2, max_steps=99)
     ppo_cfg = _build_ppo_cfg(cfg, args, EnvConfig())
     assert ppo_cfg.n_episodes == 2          # CLI wins over YAML
     assert ppo_cfg.gamma == 0.5
     assert ppo_cfg.clip_ratio == 0.1
+    assert ppo_cfg.value_loss_scale == 25.0
     assert ppo_cfg.max_steps_per_episode == 99
 
 

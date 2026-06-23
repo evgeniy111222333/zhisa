@@ -1,0 +1,63 @@
+# This file describes reproducible scenarios. The catalog and stage/data gates
+# live in zhisa.model_audit; planning never silently substitutes missing data.
+seed: 20260621
+periods_per_year:
+  15m: 35040
+bootstrap:
+  samples: 2000
+  block_bars: 672       # one week at 15m
+  confidence: 0.95
+walk_forward:
+  folds: 6
+  embargo_bars: 256
+  minimum_test_bars: 2880
+execution:
+  initial_equity: 100000.0
+  taker_fee_bps: 5.0
+  slippage_bps: 5.0
+  missed_signal_rate: 0.05
+  partial_fill_fraction: 0.50
+  spread_multiplier: 10.0
+  severe_leverage: 10.0
+  whale_notional_usd: 10000000.0
+capabilities:
+  # Add only capabilities supplied as separate, verified datasets. Examples:
+  # trades_1s, orderbook_l1, orderbook_l2, liquidations, tradfi,
+  # timeframe_5m, timeframe_1h, history_2018, cross_exchange.
+  additional: []
+scenarios:
+  bull_2024:
+    start: "2024-01-01T00:00:00Z"
+    end: "2024-12-31T23:59:59Z"
+  winter_2022:
+    start: "2022-01-01T00:00:00Z"
+    end: "2022-12-31T23:59:59Z"
+  crab_2023:
+    start: "2023-01-01T00:00:00Z"
+    end: "2023-12-31T23:59:59Z"
+  flash_crash_2021:
+    start: "2021-05-18T00:00:00Z"
+    end: "2021-05-24T23:59:59Z"
+  covid_recovery:
+    start: "2020-03-09T00:00:00Z"
+    end: "2020-04-15T23:59:59Z"
+  holidays:
+    month_day_ranges:
+      - ["12-24", "01-03"]
+  volatility_buckets:
+    atr_quantiles: [0.0, 0.25, 0.75, 1.0]
+  funding_extremes:
+    absolute_quantile: 0.99
+  fake_wick:
+    atr_multiplier: 5.0
+  volume_spoof:
+    multiplier: 10.0
+  seed_stability:
+    seeds: [11, 29, 47, 71, 101]
+thresholds:
+  profit_factor_min: 1.5
+  sortino_min: 1.0
+  max_drawdown_max: 0.25
+  calibration_ece_max: 0.05
+  noise_excess_return_abs_max: 0.01
+  minimum_trades: 100

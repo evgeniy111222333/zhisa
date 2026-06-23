@@ -24,6 +24,7 @@ from zhisa.training.s2b_imitation import (
     BehavioralCloningTrainer,
     DAggerConfig,
     DAggerTrainer,
+    _expert_actions_for_dataset,
 )
 
 
@@ -76,6 +77,7 @@ def tiny_imitation_setup(tiny_market, device):
         "n_ctx": n_ctx,
         "df": tiny_market,
         "env_cfg": env_cfg,
+        "dataset": probe_ds,
     }
 
 
@@ -112,6 +114,7 @@ def test_bc_policy_logits_match_expert_distribution(tiny_imitation_setup, device
     loss = MultiTaskLoss(LossWeights(policy=2.0))
     cfg = BCConfig(
         epochs=4, batch_size=8, log_every=10_000, device=device, seed=0,
+        policy_class_balance="sqrt_inverse",
         optim=OptimConfig(lr=3e-3, scheduler="none"),
     )
     trainer = BehavioralCloningTrainer(s["model"], loss, cfg)
@@ -123,7 +126,10 @@ def test_bc_policy_logits_match_expert_distribution(tiny_imitation_setup, device
     s["model"].eval()
     n = min(200, len(s["df"]) - 16 - 4)
     batch_size = 32
-    expert_actions = [int(expert.predict(s["df"], t)) for t in range(16, 16 + n)]
+    expert_actions = [
+        int(expert.predict(s["df"], i + s["spec"].chart_window - 1))
+        for i in range(n)
+    ]
     long_action = int(__import__("zhisa").env.actions.DiscreteAction.LONG_50)
     short_action = int(__import__("zhisa").env.actions.DiscreteAction.SHORT_50)
     long_pred = 0
@@ -135,10 +141,10 @@ def test_bc_policy_logits_match_expert_distribution(tiny_imitation_setup, device
     with torch.no_grad():
         for start in range(0, n, batch_size):
             stop = min(start + batch_size, n)
-            bs = stop - start
-            chart = torch.from_numpy(_fake_chart(16)).unsqueeze(0).expand(bs, -1, -1, -1).to(device)
-            num = torch.zeros((bs, 16, s["n_feat"]), dtype=torch.float32, device=device)
-            ctx = torch.zeros((bs, s["n_ctx"]), dtype=torch.float32, device=device)
+            samples = [s["dataset"][i] for i in range(start, stop)]
+            chart = torch.stack([sample["chart"] for sample in samples]).to(device)
+            num = torch.stack([sample["numeric"] for sample in samples]).to(device)
+            ctx = torch.stack([sample["context"] for sample in samples]).to(device)
             out = s["model"](chart=chart, numeric=num, context=ctx)
             a_pred = out["policy_logits"].argmax(dim=-1).cpu().tolist()
             for i, ap in enumerate(a_pred):
@@ -185,6 +191,25 @@ def test_bc_save_and_load_roundtrip(tmp_path, tiny_imitation_setup, device):
     # Aux heads' shapes match exactly (same config), so no missing/unexpected.
     assert not missing
     assert not unexpected
+
+
+def test_triple_barrier_expert_does_not_reuse_forward_return_cache(tiny_imitation_setup):
+    s = tiny_imitation_setup
+    dataset = s["dataset"]
+    assert dataset.target_cfg.direction_mode == "forward_return"
+    expert = TripleBarrierExpert(chart_window=16, max_holding=4)
+    calls = {"n": 0}
+    original_predict = expert.predict
+
+    def wrapped_predict(df, t):
+        calls["n"] += 1
+        return original_predict(df, t)
+
+    expert.predict = wrapped_predict  # type: ignore[method-assign]
+    actions = _expert_actions_for_dataset(dataset, expert)
+
+    assert len(actions) == len(dataset)
+    assert calls["n"] == len(dataset)
 
 
 # ---------------------------------------------------------------------------

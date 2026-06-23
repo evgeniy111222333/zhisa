@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from zhisa.rendering.chart_renderer import render_chart
+from zhisa.rendering.chart_renderer import render_chart, render_chart_array
 from zhisa.rendering.augmentations import (
     additive_gaussian_noise,
     color_jitter,
@@ -30,6 +30,16 @@ def test_render_empty_window():
     empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     img = render_chart(empty, size=16)
     assert img.shape == (3, 16, 16)
+
+
+def test_fast_array_renderer_matches_dataframe_entrypoint(small_market, monkeypatch):
+    monkeypatch.setenv("ZHISA_FAST_RENDER", "1")
+    frame = small_market.iloc[:64]
+    values = frame[["open", "high", "low", "close", "volume"]].to_numpy()
+    assert torch.equal(
+        render_chart(frame, size=64),
+        render_chart_array(values, size=64),
+    )
 
 
 def test_color_jitter_range():

@@ -115,6 +115,164 @@ class TripleBarrierExpert(ExpertPolicy):
         return int(self.skip_action)
 
 
+@dataclass
+class SymmetricUtilityExpert(ExpertPolicy):
+    """Cost-aware oracle for target-position imitation labels.
+
+    Long and short are evaluated independently with symmetric barriers. A
+    failed long is therefore never automatically relabelled as a short. The
+    expert emits target exposure classes; ``CLOSE`` means a flat target and is
+    intentionally used instead of ``SKIP`` because static BC observations do
+    not contain a current portfolio position.
+    """
+
+    chart_window: int = 128
+    horizons: tuple[int, ...] = (16, 32, 64)
+    horizon_weights: tuple[float, ...] = (0.5, 0.3, 0.2)
+    atr_window: int = 14
+    take_profit_atr: float = 2.0
+    stop_loss_atr: float = 2.0
+    fee_bps: float = 4.0
+    slippage_bps: float = 1.5
+    downside_penalty: float = 0.15
+    minimum_net_edge: float = 0.0005
+    ambiguity_margin: float = 0.0002
+    minimum_consensus: float = 2.0 / 3.0
+    size_50_atr: float = 1.00
+    size_100_atr: float = 1.70
+    _actions: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _long_utility: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _short_utility: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _cache_key: Optional[tuple] = field(default=None, init=False, repr=False)
+
+    name: str = "symmetric_utility"
+
+    def __post_init__(self) -> None:
+        self.horizons = tuple(int(h) for h in self.horizons)
+        self.horizon_weights = tuple(float(w) for w in self.horizon_weights)
+        if not self.horizons or len(self.horizons) != len(self.horizon_weights):
+            raise ValueError("horizons and horizon_weights must be non-empty and aligned")
+        if any(h <= 0 for h in self.horizons):
+            raise ValueError("all horizons must be positive")
+        total = sum(self.horizon_weights)
+        if total <= 0:
+            raise ValueError("horizon weights must have positive sum")
+        self.horizon_weights = tuple(w / total for w in self.horizon_weights)
+        if not 0.5 <= self.minimum_consensus <= 1.0:
+            raise ValueError("minimum_consensus must be in [0.5, 1.0]")
+
+    @staticmethod
+    def _forward_extreme(values: np.ndarray, horizon: int, kind: str) -> np.ndarray:
+        out = np.full(len(values), np.nan, dtype=np.float64)
+        if len(values) <= horizon:
+            return out
+        windows = np.lib.stride_tricks.sliding_window_view(values[1:], horizon)
+        reduced = windows.min(axis=1) if kind == "min" else windows.max(axis=1)
+        out[: len(reduced)] = reduced
+        return out
+
+    def _ensure_actions(self, df: pd.DataFrame) -> np.ndarray:
+        key = (id(df), len(df), str(df.index[0]), str(df.index[-1]))
+        if self._actions is not None and self._cache_key == key:
+            return self._actions
+        required = {"high", "low", "close"}
+        if not required.issubset(df.columns):
+            raise ValueError(f"missing market columns: {sorted(required - set(df.columns))}")
+        close = df["close"].to_numpy(dtype=np.float64)
+        high = df["high"].to_numpy(dtype=np.float64)
+        low = df["low"].to_numpy(dtype=np.float64)
+        prev = np.r_[close[0], close[:-1]]
+        true_range = np.maximum(high - low, np.maximum(np.abs(high - prev), np.abs(low - prev)))
+        atr = pd.Series(true_range).rolling(self.atr_window, min_periods=1).mean().to_numpy()
+        atr_pct = atr / np.maximum(close, 1e-12)
+        n = len(df)
+        long_score = np.zeros(n, dtype=np.float64)
+        short_score = np.zeros(n, dtype=np.float64)
+        long_votes = np.zeros(n, dtype=np.float64)
+        short_votes = np.zeros(n, dtype=np.float64)
+        valid_weight = np.zeros(n, dtype=np.float64)
+        round_trip_cost = 2.0 * (self.fee_bps + self.slippage_bps) / 10_000.0
+
+        for horizon, weight in zip(self.horizons, self.horizon_weights):
+            future_low = self._forward_extreme(low, horizon, "min")
+            future_high = self._forward_extreme(high, horizon, "max")
+            future_close = np.full(n, np.nan, dtype=np.float64)
+            future_close[:-horizon] = close[horizon:]
+            valid = np.isfinite(future_close) & (close > 0) & (atr > 0)
+
+            long_stop = close - self.stop_loss_atr * atr
+            long_take = close + self.take_profit_atr * atr
+            short_stop = close + self.stop_loss_atr * atr
+            short_take = close - self.take_profit_atr * atr
+            long_adverse = future_low <= long_stop
+            long_favourable = future_high >= long_take
+            short_adverse = future_high >= short_stop
+            short_favourable = future_low <= short_take
+
+            terminal_long = future_close / np.maximum(close, 1e-12) - 1.0
+            terminal_short = 1.0 - future_close / np.maximum(close, 1e-12)
+            long_ret = np.where(
+                long_adverse,
+                -self.stop_loss_atr * atr_pct,
+                np.where(long_favourable, self.take_profit_atr * atr_pct, terminal_long),
+            )
+            short_ret = np.where(
+                short_adverse,
+                -self.stop_loss_atr * atr_pct,
+                np.where(short_favourable, self.take_profit_atr * atr_pct, terminal_short),
+            )
+            long_mae = np.maximum(0.0, (close - future_low) / np.maximum(close, 1e-12))
+            short_mae = np.maximum(0.0, (future_high - close) / np.maximum(close, 1e-12))
+            long_utility = long_ret - round_trip_cost - self.downside_penalty * long_mae
+            short_utility = short_ret - round_trip_cost - self.downside_penalty * short_mae
+            long_utility[~valid] = 0.0
+            short_utility[~valid] = 0.0
+            long_score += weight * long_utility
+            short_score += weight * short_utility
+            long_votes += weight * (long_utility > short_utility)
+            short_votes += weight * (short_utility > long_utility)
+            valid_weight += weight * valid
+
+        actions = np.full(n, int(DiscreteAction.CLOSE), dtype=np.int64)
+        choose_long = long_score > short_score
+        best = np.where(choose_long, long_score, short_score)
+        gap = np.abs(long_score - short_score)
+        consensus = np.where(choose_long, long_votes, short_votes)
+        tradable = (
+            (valid_weight > 0.999)
+            & (best >= self.minimum_net_edge)
+            & (gap >= self.ambiguity_margin)
+            & (consensus >= self.minimum_consensus)
+        )
+        strength = best / np.maximum(atr_pct, 1e-8)
+        long_action = np.where(
+            strength >= self.size_100_atr,
+            int(DiscreteAction.LONG_100),
+            np.where(strength >= self.size_50_atr, int(DiscreteAction.LONG_50), int(DiscreteAction.LONG_25)),
+        )
+        short_action = np.where(
+            strength >= self.size_100_atr,
+            int(DiscreteAction.SHORT_100),
+            np.where(strength >= self.size_50_atr, int(DiscreteAction.SHORT_50), int(DiscreteAction.SHORT_25)),
+        )
+        actions[tradable] = np.where(choose_long, long_action, short_action)[tradable]
+        actions[: self.chart_window] = int(DiscreteAction.CLOSE)
+        actions[n - max(self.horizons) :] = int(DiscreteAction.CLOSE)
+        self._actions = actions
+        self._long_utility = long_score
+        self._short_utility = short_score
+        self._cache_key = key
+        return actions
+
+    def predict(self, df: pd.DataFrame, t: int) -> int:
+        if t < 0 or t >= len(df):
+            return int(DiscreteAction.CLOSE)
+        return int(self._ensure_actions(df)[t])
+
+    def predict_array(self, df: pd.DataFrame, start: int = 0) -> np.ndarray:
+        return self._ensure_actions(df)[start:].copy()
+
+
 # ---------------------------------------------------------------------------
 # Momentum expert (no look-ahead)
 # ---------------------------------------------------------------------------
@@ -204,6 +362,7 @@ class SmaCrossExpert(ExpertPolicy):
 
 SUPPORTED_EXPERTS = {
     "triple_barrier": TripleBarrierExpert,
+    "symmetric_utility": SymmetricUtilityExpert,
     "momentum": MomentumExpert,
     "sma_cross": SmaCrossExpert,
 }

@@ -35,7 +35,7 @@ optim:
 env_cfg:
   window: 32
   image_size: 32
-  initial_cash: 10000.0
+  initial_equity: 1.0
   fee_bps: 5.0
-  slippage_bps: 2.0
+  slippage_bps_per_unit: 2.0
   episode_length: 200

@@ -1,0 +1,566 @@
+{
+  "stages": {
+    "load_repair": {
+      "BTC/USDT": {
+        "before": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 14 bars have zero or negative volume (14 rows)",
+            "[WARNING] gap: 21 time gaps detected (expected interval: 0 days 00:15:00) (21 rows)"
+          ]
+        },
+        "after": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "ETH/USDT": {
+        "before": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 14 bars have zero or negative volume (14 rows)",
+            "[WARNING] gap: 21 time gaps detected (expected interval: 0 days 00:15:00) (21 rows)"
+          ]
+        },
+        "after": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "SOL/USDT": {
+        "before": {
+          "rows": 202058,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 10 bars have zero or negative volume (10 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 00:15:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 202058,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "BNB/USDT": {
+        "before": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 14 bars have zero or negative volume (14 rows)",
+            "[WARNING] gap: 21 time gaps detected (expected interval: 0 days 00:15:00) (21 rows)"
+          ]
+        },
+        "after": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "ADA/USDT": {
+        "before": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 14 bars have zero or negative volume (14 rows)",
+            "[WARNING] gap: 21 time gaps detected (expected interval: 0 days 00:15:00) (21 rows)"
+          ]
+        },
+        "after": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "XRP/USDT": {
+        "before": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 14 bars have zero or negative volume (14 rows)",
+            "[WARNING] gap: 21 time gaps detected (expected interval: 0 days 00:15:00) (21 rows)"
+          ]
+        },
+        "after": {
+          "rows": 258354,
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    "gap_policy": {
+      "BTC/USDT": {
+        "target_rows": 258624,
+        "kept_rows": 258438,
+        "dropped_bars": 186,
+        "ffill_limit": 4
+      },
+      "ETH/USDT": {
+        "target_rows": 258624,
+        "kept_rows": 258438,
+        "dropped_bars": 186,
+        "ffill_limit": 4
+      },
+      "SOL/USDT": {
+        "target_rows": 202152,
+        "kept_rows": 202098,
+        "dropped_bars": 54,
+        "ffill_limit": 4
+      },
+      "BNB/USDT": {
+        "target_rows": 258624,
+        "kept_rows": 258438,
+        "dropped_bars": 186,
+        "ffill_limit": 4
+      },
+      "ADA/USDT": {
+        "target_rows": 258624,
+        "kept_rows": 258438,
+        "dropped_bars": 186,
+        "ffill_limit": 4
+      },
+      "XRP/USDT": {
+        "target_rows": 258624,
+        "kept_rows": 258438,
+        "dropped_bars": 186,
+        "ffill_limit": 4
+      }
+    },
+    "coverage_alignment": {
+      "aligned_window": {
+        "start": "2020-08-11 06:00:00+00:00",
+        "end": "2026-05-17 23:45:00+00:00",
+        "bars_per_symbol_min": 202098,
+        "bars_per_symbol_max": 202098
+      },
+      "dropped_symbols": [],
+      "per_symbol_starts": {
+        "BTC/USDT": "2019-01-01 00:00:00+00:00",
+        "ETH/USDT": "2019-01-01 00:00:00+00:00",
+        "SOL/USDT": "2020-08-11 06:00:00+00:00",
+        "BNB/USDT": "2019-01-01 00:00:00+00:00",
+        "ADA/USDT": "2019-01-01 00:00:00+00:00",
+        "XRP/USDT": "2019-01-01 00:00:00+00:00"
+      },
+      "per_symbol_ends": {
+        "BTC/USDT": "2026-05-17 23:45:00+00:00",
+        "ETH/USDT": "2026-05-17 23:45:00+00:00",
+        "SOL/USDT": "2026-05-17 23:45:00+00:00",
+        "BNB/USDT": "2026-05-17 23:45:00+00:00",
+        "ADA/USDT": "2026-05-17 23:45:00+00:00",
+        "XRP/USDT": "2026-05-17 23:45:00+00:00"
+      }
+    },
+    "context_merge": {
+      "merged": {
+        "BTC/USDT": {
+          "source_rows": 234553,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 99.99950519055112
+        },
+        "ETH/USDT": {
+          "source_rows": 226913,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 99.99950519055112
+        },
+        "SOL/USDT": {
+          "source_rows": 198912,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 98.39632257617592
+        },
+        "BNB/USDT": {
+          "source_rows": 219744,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 99.99950519055112
+        },
+        "ADA/USDT": {
+          "source_rows": 220704,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 99.99950519055112
+        },
+        "XRP/USDT": {
+          "source_rows": 223104,
+          "target_rows": 202098,
+          "columns_added": [
+            "ctx_futures_open",
+            "ctx_futures_high",
+            "ctx_futures_low",
+            "ctx_futures_close",
+            "ctx_futures_volume",
+            "ctx_kline_taker_buy_volume",
+            "ctx_kline_taker_sell_volume",
+            "ctx_open_interest",
+            "ctx_open_interest_value",
+            "ctx_top_trader_long_short_ratio",
+            "ctx_global_long_short_ratio",
+            "ctx_taker_buy_sell_ratio",
+            "ctx_mark_open",
+            "ctx_mark_high",
+            "ctx_mark_low",
+            "ctx_mark_close",
+            "ctx_mark_price",
+            "ctx_index_open",
+            "ctx_index_high",
+            "ctx_index_low",
+            "ctx_index_close",
+            "ctx_premium_open",
+            "ctx_premium_high",
+            "ctx_premium_low",
+            "ctx_premium_close",
+            "ctx_premium_index",
+            "ctx_funding_rate"
+          ],
+          "lag_bars": 1,
+          "ffill_limit": 192,
+          "coverage_pct": 99.99950519055112
+        }
+      },
+      "skipped": []
+    }
+  },
+  "manifest": {
+    "version": "v1",
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT",
+      "ADA/USDT",
+      "XRP/USDT"
+    ],
+    "timeframe": "15m",
+    "rows_total": 1212588,
+    "rows_per_symbol": {
+      "BTC/USDT": 202098,
+      "ETH/USDT": 202098,
+      "SOL/USDT": 202098,
+      "BNB/USDT": 202098,
+      "ADA/USDT": 202098,
+      "XRP/USDT": 202098
+    },
+    "gap_policy": {
+      "max_ffill_bars": 4,
+      "drop_long_gaps": true,
+      "require_monotonic": true
+    },
+    "coverage_policy": {
+      "start": null,
+      "end": null,
+      "min_bars": 1000
+    },
+    "start": "2020-08-11 06:00:00+00:00",
+    "end": "2026-05-17 23:45:00+00:00",
+    "feature_columns": [
+      "close",
+      "ctx_funding_rate",
+      "ctx_futures_close",
+      "ctx_futures_high",
+      "ctx_futures_low",
+      "ctx_futures_open",
+      "ctx_futures_volume",
+      "ctx_global_long_short_ratio",
+      "ctx_index_close",
+      "ctx_index_high",
+      "ctx_index_low",
+      "ctx_index_open",
+      "ctx_kline_taker_buy_volume",
+      "ctx_kline_taker_sell_volume",
+      "ctx_mark_close",
+      "ctx_mark_high",
+      "ctx_mark_low",
+      "ctx_mark_open",
+      "ctx_mark_price",
+      "ctx_open_interest",
+      "ctx_open_interest_value",
+      "ctx_premium_close",
+      "ctx_premium_high",
+      "ctx_premium_index",
+      "ctx_premium_low",
+      "ctx_premium_open",
+      "ctx_taker_buy_sell_ratio",
+      "ctx_top_trader_long_short_ratio",
+      "high",
+      "low",
+      "open",
+      "volume"
+    ],
+    "input_checksums": {
+      "BTC/USDT": "d69de3160f7dced51a8cb3cf8a34fdfdc55c1f35efc5441ffef837287e2d45ae",
+      "ETH/USDT": "b5c2cf37875c0a4459c2312585c59b52c0bf4deb50cc79bc75120cf1afad6329",
+      "SOL/USDT": "07091ab2af57fe60a91d68069c9953a42f22556ed2ac9a4a01a99eb6c35dabd8",
+      "BNB/USDT": "4e9ce87ed40a161aef21f6478260cb59fadb8cd6baa42fa6ad1f9e63dc03fb1d",
+      "ADA/USDT": "af9f810e9d12904bb09833236d11b673283d850731178a5e36cbc083c28248a0",
+      "XRP/USDT": "eb2591b41af338c9f4a54105a22fc1980f01d8389ce8f1e40461f5e90ae4d6d7"
+    },
+    "output_checksum": "365e964304fed119ef2a00aed5f254194ba49243e9acef60c3ffe82da1d898ca"
+  },
+  "splits": {
+    "BTC/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    },
+    "ETH/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    },
+    "SOL/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    },
+    "BNB/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    },
+    "ADA/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    },
+    "XRP/USDT": {
+      "total_bars": 202098,
+      "train_bars": 141334,
+      "val_bars": 30285,
+      "test_bars": 30287,
+      "train_end_ts": "2024-08-23 00:45:00+00:00",
+      "val_start_ts": "2024-08-24 01:00:00+00:00",
+      "val_end_ts": "2025-07-05 12:00:00+00:00",
+      "test_start_ts": "2025-07-06 12:15:00+00:00",
+      "test_end_ts": "2026-05-17 23:45:00+00:00"
+    }
+  },
+  "rows_per_symbol": {
+    "BTC/USDT": 202098,
+    "ETH/USDT": 202098,
+    "SOL/USDT": 202098,
+    "BNB/USDT": 202098,
+    "ADA/USDT": 202098,
+    "XRP/USDT": 202098
+  },
+  "feature_columns": [
+    "close",
+    "ctx_funding_rate",
+    "ctx_futures_close",
+    "ctx_futures_high",
+    "ctx_futures_low",
+    "ctx_futures_open",
+    "ctx_futures_volume",
+    "ctx_global_long_short_ratio",
+    "ctx_index_close",
+    "ctx_index_high",
+    "ctx_index_low",
+    "ctx_index_open",
+    "ctx_kline_taker_buy_volume",
+    "ctx_kline_taker_sell_volume",
+    "ctx_mark_close",
+    "ctx_mark_high",
+    "ctx_mark_low",
+    "ctx_mark_open",
+    "ctx_mark_price",
+    "ctx_open_interest",
+    "ctx_open_interest_value",
+    "ctx_premium_close",
+    "ctx_premium_high",
+    "ctx_premium_index",
+    "ctx_premium_low",
+    "ctx_premium_open",
+    "ctx_taker_buy_sell_ratio",
+    "ctx_top_trader_long_short_ratio",
+    "high",
+    "low",
+    "open",
+    "volume"
+  ]
+}

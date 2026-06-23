@@ -1,0 +1,76 @@
+{
+  "version": "v1",
+  "symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "ADA/USDT",
+    "XRP/USDT"
+  ],
+  "timeframe": "15m",
+  "rows_total": 1212588,
+  "rows_per_symbol": {
+    "BTC/USDT": 202098,
+    "ETH/USDT": 202098,
+    "SOL/USDT": 202098,
+    "BNB/USDT": 202098,
+    "ADA/USDT": 202098,
+    "XRP/USDT": 202098
+  },
+  "gap_policy": {
+    "max_ffill_bars": 4,
+    "drop_long_gaps": true,
+    "require_monotonic": true
+  },
+  "coverage_policy": {
+    "start": null,
+    "end": null,
+    "min_bars": 1000
+  },
+  "start": "2020-08-11 06:00:00+00:00",
+  "end": "2026-05-17 23:45:00+00:00",
+  "feature_columns": [
+    "close",
+    "ctx_funding_rate",
+    "ctx_futures_close",
+    "ctx_futures_high",
+    "ctx_futures_low",
+    "ctx_futures_open",
+    "ctx_futures_volume",
+    "ctx_global_long_short_ratio",
+    "ctx_index_close",
+    "ctx_index_high",
+    "ctx_index_low",
+    "ctx_index_open",
+    "ctx_kline_taker_buy_volume",
+    "ctx_kline_taker_sell_volume",
+    "ctx_mark_close",
+    "ctx_mark_high",
+    "ctx_mark_low",
+    "ctx_mark_open",
+    "ctx_mark_price",
+    "ctx_open_interest",
+    "ctx_open_interest_value",
+    "ctx_premium_close",
+    "ctx_premium_high",
+    "ctx_premium_index",
+    "ctx_premium_low",
+    "ctx_premium_open",
+    "ctx_taker_buy_sell_ratio",
+    "ctx_top_trader_long_short_ratio",
+    "high",
+    "low",
+    "open",
+    "volume"
+  ],
+  "input_checksums": {
+    "BTC/USDT": "d69de3160f7dced51a8cb3cf8a34fdfdc55c1f35efc5441ffef837287e2d45ae",
+    "ETH/USDT": "b5c2cf37875c0a4459c2312585c59b52c0bf4deb50cc79bc75120cf1afad6329",
+    "SOL/USDT": "07091ab2af57fe60a91d68069c9953a42f22556ed2ac9a4a01a99eb6c35dabd8",
+    "BNB/USDT": "4e9ce87ed40a161aef21f6478260cb59fadb8cd6baa42fa6ad1f9e63dc03fb1d",
+    "ADA/USDT": "af9f810e9d12904bb09833236d11b673283d850731178a5e36cbc083c28248a0",
+    "XRP/USDT": "eb2591b41af338c9f4a54105a22fc1980f01d8389ce8f1e40461f5e90ae4d6d7"
+  },
+  "output_checksum": "365e964304fed119ef2a00aed5f254194ba49243e9acef60c3ffe82da1d898ca"
+}

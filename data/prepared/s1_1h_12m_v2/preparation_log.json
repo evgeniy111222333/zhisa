@@ -1,0 +1,603 @@
+{
+  "stages": {
+    "load_repair": {
+      "BTC/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "ETH/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "SOL/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "BNB/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "ADA/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "XRP/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "DOGE/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)",
+            "[WARNING] anomaly: 1 bars have price changes exceeding 50% (1 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] anomaly: 1 bars have price changes exceeding 50% (1 rows)"
+          ]
+        }
+      },
+      "LINK/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "AVAX/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "LTC/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "DOT/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      },
+      "TRX/USDT": {
+        "before": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": [
+            "[WARNING] zero_volume: 2 bars have zero or negative volume (2 rows)",
+            "[WARNING] gap: 10 time gaps detected (expected interval: 0 days 01:00:00) (10 rows)"
+          ]
+        },
+        "after": {
+          "rows": 50111,
+          "errors": [],
+          "warnings": []
+        }
+      }
+    },
+    "gap_policy": {
+      "BTC/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "ETH/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "SOL/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "BNB/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "ADA/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "XRP/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "DOGE/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "LINK/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "AVAX/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "LTC/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "DOT/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      },
+      "TRX/USDT": {
+        "target_rows": 50131,
+        "kept_rows": 50121,
+        "dropped_bars": 10,
+        "ffill_limit": 1
+      }
+    },
+    "coverage_alignment": {
+      "aligned_window": {
+        "start": "2020-10-01 00:00:00+00:00",
+        "end": "2026-06-20 18:00:00+00:00",
+        "bars_per_symbol_min": 50121,
+        "bars_per_symbol_max": 50121
+      },
+      "dropped_symbols": [],
+      "per_symbol_starts": {
+        "BTC/USDT": "2020-10-01 00:00:00+00:00",
+        "ETH/USDT": "2020-10-01 00:00:00+00:00",
+        "SOL/USDT": "2020-10-01 00:00:00+00:00",
+        "BNB/USDT": "2020-10-01 00:00:00+00:00",
+        "ADA/USDT": "2020-10-01 00:00:00+00:00",
+        "XRP/USDT": "2020-10-01 00:00:00+00:00",
+        "DOGE/USDT": "2020-10-01 00:00:00+00:00",
+        "LINK/USDT": "2020-10-01 00:00:00+00:00",
+        "AVAX/USDT": "2020-10-01 00:00:00+00:00",
+        "LTC/USDT": "2020-10-01 00:00:00+00:00",
+        "DOT/USDT": "2020-10-01 00:00:00+00:00",
+        "TRX/USDT": "2020-10-01 00:00:00+00:00"
+      },
+      "per_symbol_ends": {
+        "BTC/USDT": "2026-06-20 18:00:00+00:00",
+        "ETH/USDT": "2026-06-20 18:00:00+00:00",
+        "SOL/USDT": "2026-06-20 18:00:00+00:00",
+        "BNB/USDT": "2026-06-20 18:00:00+00:00",
+        "ADA/USDT": "2026-06-20 18:00:00+00:00",
+        "XRP/USDT": "2026-06-20 18:00:00+00:00",
+        "DOGE/USDT": "2026-06-20 18:00:00+00:00",
+        "LINK/USDT": "2026-06-20 18:00:00+00:00",
+        "AVAX/USDT": "2026-06-20 18:00:00+00:00",
+        "LTC/USDT": "2026-06-20 18:00:00+00:00",
+        "DOT/USDT": "2026-06-20 18:00:00+00:00",
+        "TRX/USDT": "2026-06-20 18:00:00+00:00"
+      }
+    },
+    "context_merge": {
+      "merged": {},
+      "skipped": [
+        {
+          "symbol": "BTC/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "ETH/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "SOL/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "BNB/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "ADA/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "XRP/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "DOGE/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "LINK/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "AVAX/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "LTC/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "DOT/USDT",
+          "reason": "context_disabled"
+        },
+        {
+          "symbol": "TRX/USDT",
+          "reason": "context_disabled"
+        }
+      ]
+    }
+  },
+  "manifest": {
+    "version": "v1",
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT",
+      "ADA/USDT",
+      "XRP/USDT",
+      "DOGE/USDT",
+      "LINK/USDT",
+      "AVAX/USDT",
+      "LTC/USDT",
+      "DOT/USDT",
+      "TRX/USDT"
+    ],
+    "timeframe": "1h",
+    "rows_total": 601452,
+    "rows_per_symbol": {
+      "BTC/USDT": 50121,
+      "ETH/USDT": 50121,
+      "SOL/USDT": 50121,
+      "BNB/USDT": 50121,
+      "ADA/USDT": 50121,
+      "XRP/USDT": 50121,
+      "DOGE/USDT": 50121,
+      "LINK/USDT": 50121,
+      "AVAX/USDT": 50121,
+      "LTC/USDT": 50121,
+      "DOT/USDT": 50121,
+      "TRX/USDT": 50121
+    },
+    "gap_policy": {
+      "max_ffill_bars": 1,
+      "drop_long_gaps": true,
+      "require_monotonic": true
+    },
+    "coverage_policy": {
+      "start": "2020-10-01T00:00:00Z",
+      "end": "2026-06-20T18:00:00Z",
+      "min_bars": 49000
+    },
+    "start": "2020-10-01 00:00:00+00:00",
+    "end": "2026-06-20 18:00:00+00:00",
+    "feature_columns": [
+      "close",
+      "high",
+      "low",
+      "open",
+      "volume"
+    ],
+    "input_checksums": {
+      "BTC/USDT": "185ee18e93103d06b46409583e5307936f741748eda49418a49eca14be73bdb1",
+      "ETH/USDT": "498303c30671fbdfe51d283059dbb891c024f360d4b2d6681675fe20e382d21e",
+      "SOL/USDT": "3db0acc25ab8b95303e1f554da96c3eb4b0f5fc29590c110b08fedb04ea41dc8",
+      "BNB/USDT": "2a9bf265412d68ffb226ba1005bee6036427f91fcc04a6cecf77b9e56bed96f1",
+      "ADA/USDT": "5bf7a36ebaa69c1b8474b62d7c51022ecd27c83204a4929be7e53e9122d3d9aa",
+      "XRP/USDT": "9c1b4a77d6cd8e4d32508342027406139deb9e2d71aa73a163c69e18b8af5d75",
+      "DOGE/USDT": "deefa74e56caa30721d94ae77e763c146289f7e128366ec20046e16857d38308",
+      "LINK/USDT": "d7a13af4bbe6b601e2843b1a05dba6d1e3a401b80bc85a22ab214b85739769ab",
+      "AVAX/USDT": "b364f2b57eb5fc1e9656baacb9aca524dd35a984be89ab64dda64ac0ee194593",
+      "LTC/USDT": "8ad0eabbb666df4de2ce07853f58cb02f17367f8309b023fc900550d02fe7f02",
+      "DOT/USDT": "7cfcf378d859f318df8b22cc85e3c79d29233ca7f9bd0b21a01ce52ee619ed19",
+      "TRX/USDT": "789bfaa6b31fa0dbcd25e06d8ec0160ba5c725590134941e293501d208d50f02"
+    },
+    "output_checksums": {
+      "BTC/USDT": "185ee18e93103d06b46409583e5307936f741748eda49418a49eca14be73bdb1",
+      "ETH/USDT": "498303c30671fbdfe51d283059dbb891c024f360d4b2d6681675fe20e382d21e",
+      "SOL/USDT": "3db0acc25ab8b95303e1f554da96c3eb4b0f5fc29590c110b08fedb04ea41dc8",
+      "BNB/USDT": "2a9bf265412d68ffb226ba1005bee6036427f91fcc04a6cecf77b9e56bed96f1",
+      "ADA/USDT": "5bf7a36ebaa69c1b8474b62d7c51022ecd27c83204a4929be7e53e9122d3d9aa",
+      "XRP/USDT": "9c1b4a77d6cd8e4d32508342027406139deb9e2d71aa73a163c69e18b8af5d75",
+      "DOGE/USDT": "deefa74e56caa30721d94ae77e763c146289f7e128366ec20046e16857d38308",
+      "LINK/USDT": "d7a13af4bbe6b601e2843b1a05dba6d1e3a401b80bc85a22ab214b85739769ab",
+      "AVAX/USDT": "b364f2b57eb5fc1e9656baacb9aca524dd35a984be89ab64dda64ac0ee194593",
+      "LTC/USDT": "8ad0eabbb666df4de2ce07853f58cb02f17367f8309b023fc900550d02fe7f02",
+      "DOT/USDT": "7cfcf378d859f318df8b22cc85e3c79d29233ca7f9bd0b21a01ce52ee619ed19",
+      "TRX/USDT": "789bfaa6b31fa0dbcd25e06d8ec0160ba5c725590134941e293501d208d50f02"
+    },
+    "output_checksum": "b874977231a7cb6cdb6209ccf5b90934680870d17aaf273c4f6484872b49a54c"
+  },
+  "splits": {
+    "BTC/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "ETH/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "SOL/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "BNB/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "ADA/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "XRP/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "DOGE/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "LINK/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "AVAX/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "LTC/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "DOT/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    },
+    "TRX/USDT": {
+      "total_bars": 50121,
+      "train_bars": 35051,
+      "val_bars": 7510,
+      "test_bars": 7512,
+      "train_end_ts": "2024-09-30 20:00:00+00:00",
+      "val_start_ts": "2024-10-01 21:00:00+00:00",
+      "val_end_ts": "2025-08-10 18:00:00+00:00",
+      "test_start_ts": "2025-08-11 19:00:00+00:00",
+      "test_end_ts": "2026-06-20 18:00:00+00:00"
+    }
+  },
+  "rows_per_symbol": {
+    "BTC/USDT": 50121,
+    "ETH/USDT": 50121,
+    "SOL/USDT": 50121,
+    "BNB/USDT": 50121,
+    "ADA/USDT": 50121,
+    "XRP/USDT": 50121,
+    "DOGE/USDT": 50121,
+    "LINK/USDT": 50121,
+    "AVAX/USDT": 50121,
+    "LTC/USDT": 50121,
+    "DOT/USDT": 50121,
+    "TRX/USDT": 50121
+  },
+  "raw_source_checksums": {
+    "BTC/USDT": "5cd159c0e474dbc75988dbc9e70e8563aa0012d9298a2810c10869c5979c4777",
+    "ETH/USDT": "36f6bec6403521e0715d4164ce7bb6324c824c680e603da9b19234533780ab0a",
+    "SOL/USDT": "e43dde2a3a61b4bedbb5febb97ad78c06734bc67b2c3426b591eb93057d891a6",
+    "BNB/USDT": "0171535a8381243a47c787364cbc73b321f6df1f88e83556607b3de71b43afb2",
+    "ADA/USDT": "e8d47d80c3e392a12f1494bfd5f7e9004e2d3d7703eb79c29e2bfe22528cc7e6",
+    "XRP/USDT": "90df1286c8640ff807ed1cf8df5655fb17469fa06af2aae33b0d09df7af8f5da",
+    "DOGE/USDT": "307b75f963ee0432913681ee8dbfad1e6e7d5d4539bf99c074c28b6d1582c64b",
+    "LINK/USDT": "19e61946d2b007febcaab1758b1c4cc942d4cf39a79575bc9da3b31dff61571c",
+    "AVAX/USDT": "673ab20abebb2aef918ed2af85a423229232644975052ba71e7420ad731254d5",
+    "LTC/USDT": "c53c241fc1f4a4e6d3af1d8d75c34dead1863c6ab7281ed6012ca47fe997f908",
+    "DOT/USDT": "2ffb13e504a9f598b7da9f8ad13f45be5381ca560e684aece1859732b7e5ca02",
+    "TRX/USDT": "3519ceaf2c5d78920a8327bdd7137cdc136e3339265a78c4c67bbcb38354c951"
+  },
+  "feature_columns": [
+    "close",
+    "high",
+    "low",
+    "open",
+    "volume"
+  ]
+}

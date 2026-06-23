@@ -1,0 +1,18 @@
+{
+  "instrument": "XRP/USDT",
+  "timeframe": "1h",
+  "start": "2020-10-01T00:00:00+00:00",
+  "end": "2026-06-20T18:00:00+00:00",
+  "row_count": 50111,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1758276,
+  "checksum": "f8c6b47191bd04c7ccbb822d56365cad",
+  "created_at": "2026-06-20T19:08:58.460701+00:00",
+  "updated_at": "2026-06-20T19:08:58.460701+00:00"
+}

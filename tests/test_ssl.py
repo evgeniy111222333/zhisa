@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn.functional as F
+from torch.utils.data import ConcatDataset, Dataset
 
 from zhisa.data.dataset import MarketDataset, SampleSpec
 from zhisa.models.policy import build_default_policy
@@ -24,6 +25,7 @@ from zhisa.training.s1_ssl import (
     EMATeacher,
     SSLConfig,
     SSLPretrainer,
+    TemporalPairDataset,
     info_nce,
     load_pretrained_into_policy,
     masked_numeric_loss,
@@ -58,6 +60,41 @@ def tiny_batch(tiny_policy):
         "numeric": torch.rand(B, 16, 8),
         "context": torch.rand(B, 6),
     }
+
+
+# ---------------------------------------------------------------------------
+# Temporal pairs
+# ---------------------------------------------------------------------------
+
+
+class _IndexedDataset(Dataset):
+    def __init__(self, symbol: str, length: int):
+        self.symbol = symbol
+        self.length = length
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        return self.symbol, index
+
+
+def test_temporal_pair_dataset_uses_requested_future_horizon():
+    pairs = TemporalPairDataset(_IndexedDataset("BTC", 6), horizon=2)
+    assert len(pairs) == 4
+    assert pairs[0] == (("BTC", 0), ("BTC", 2))
+    assert pairs[-1] == (("BTC", 3), ("BTC", 5))
+
+
+def test_temporal_pairs_never_cross_concat_dataset_boundaries():
+    pairs = TemporalPairDataset(
+        ConcatDataset([_IndexedDataset("BTC", 4), _IndexedDataset("ETH", 5)]),
+        horizon=1,
+    )
+    assert len(pairs) == 7
+    for current, future in pairs:
+        assert current[0] == future[0]
+        assert future[1] == current[1] + 1
 
 
 # ---------------------------------------------------------------------------
@@ -360,11 +397,87 @@ def test_ssl_checkpoint_round_trip(tiny_policy, tiny_batch, tmp_path, device):
     # Build a fresh policy + trainer, load.
     fresh = build_default_policy(
         in_numeric_features=8, in_context_features=6, window=16, image_size=16,
+        n_actions=5, n_regime_classes=3,
     )
     tr2 = SSLPretrainer(fresh, SSLConfig(device=device))
-    tr2.load(str(ckpt))
+    status = tr2.load(str(ckpt))
+    assert status["optimizer_restored"] is True
+    assert status["legacy_warm_start"] is False
+    assert status["step"] == 1
     out = tr2.step(tiny_batch)
     assert "total" in out
+    assert tr2._step == 2
+
+
+def test_ssl_legacy_checkpoint_loads_as_warm_start(
+    tiny_policy, tiny_batch, tmp_path, device
+):
+    tr1 = SSLPretrainer(tiny_policy, SSLConfig(device=device))
+    tr1.step(tiny_batch)
+    modern = tmp_path / "modern.pt"
+    legacy = tmp_path / "legacy.pt"
+    tr1.save(str(modern))
+    payload = torch.load(modern, map_location="cpu", weights_only=False)
+    payload.pop("optimizer")
+    payload.pop("trainer_state")
+    payload.pop("target_proj_temporal")
+    torch.save(payload, legacy)
+
+    fresh = build_default_policy(
+        in_numeric_features=8, in_context_features=6, window=16, image_size=16,
+        n_actions=5, n_regime_classes=3,
+    )
+    tr2 = SSLPretrainer(fresh, SSLConfig(device=device))
+    status = tr2.load(str(legacy))
+    assert status["optimizer_restored"] is False
+    assert status["legacy_warm_start"] is True
+    assert status["resume_mode"] == "warm_start"
+    assert status["step"] == 0
+    assert status["completed_epochs"] == 0
+
+
+def test_full_resume_applies_new_phase_learning_rate(
+    tiny_policy, tiny_batch, tmp_path, device
+):
+    first = SSLPretrainer(tiny_policy, SSLConfig(device=device, lr=1e-3))
+    first.step(tiny_batch)
+    checkpoint = tmp_path / "phase_a.pt"
+    first.save(str(checkpoint))
+
+    fresh = build_default_policy(
+        in_numeric_features=8, in_context_features=6, window=16, image_size=16,
+        n_actions=5, n_regime_classes=3,
+    )
+    second = SSLPretrainer(
+        fresh, SSLConfig(device=device, lr=1e-5, warmup_steps=0)
+    )
+    assert second.load(str(checkpoint))["optimizer_restored"] is True
+    second.step(tiny_batch)
+    assert second.opt.param_groups[0]["lr"] == pytest.approx(1e-5)
+
+
+def test_ssl_validation_writes_best_checkpoint(small_market, tmp_path, device):
+    spec = SampleSpec(
+        chart_window=16, feature_window=16, image_size=16,
+        horizons=(4, 8), n_regime_states=3,
+    )
+    ds = MarketDataset(small_market, spec=spec, cache_charts=True)
+    policy = build_default_policy(
+        in_numeric_features=ds._features.shape[1],
+        in_context_features=ds._time_features.shape[1],
+        window=16, image_size=16,
+    )
+    best = tmp_path / "best.pt"
+    cfg = SSLConfig(
+        epochs=1, batch_size=64, device=device, val_max_batches=1,
+        best_checkpoint=str(best), log_every=1000,
+    )
+    result = SSLPretrainer(policy, cfg).fit(ds, val_ds=ds)
+    assert best.exists()
+    assert result["history"][0]["val"]["n_samples"] > 0
+    saved = torch.load(best, map_location="cpu", weights_only=False)
+    assert saved["trainer_state"]["completed_epochs"] == 1
+    assert saved["checkpoint_meta"]["temporal_pairing"] == "causal_adjacent_sample"
 
 
 def test_s2_can_resume_from_s1_checkpoint(small_market, tmp_path, device):

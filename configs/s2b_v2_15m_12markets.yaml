@@ -1,0 +1,51 @@
+# S2b-v2: symmetric, cost-aware target-position imitation from S2 champion.
+seed: 20260622
+device: cuda
+trainer: bc
+expert: symmetric_utility
+chart_window: 128
+image_size: 128
+n_regime_states: 4
+batch_size: 256
+workers: 4
+grad_clip: 1.0
+log_every: 100
+bc_epochs: 6
+early_stopping_patience: 2
+early_stopping_min_delta: 0.001
+freeze_backbone_epochs: 1
+backbone_lr_scale: 0.10
+policy_class_balance: sqrt_inverse
+policy_focal_gamma: 1.5
+policy_direction_aux_weight: 0.50
+policy_size_aux_weight: 0.25
+champion_metric: composite_score
+label_smoothing: 0.0
+optim:
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_steps: 1000
+  t_max: 42000
+loss_weights:
+  direction: 0.15
+  volatility: 0.05
+  regime: 0.05
+  return_pred: 0.10
+  policy: 1.0
+  value: 0.10
+  uncertainty: 0.02
+expert_kwargs:
+  horizons: [16, 32, 64]
+  horizon_weights: [0.5, 0.3, 0.2]
+  atr_window: 14
+  take_profit_atr: 2.0
+  stop_loss_atr: 2.0
+  fee_bps: 4.0
+  slippage_bps: 1.5
+  downside_penalty: 0.15
+  minimum_net_edge: 0.0005
+  ambiguity_margin: 0.0002
+  minimum_consensus: 0.6666667
+  size_50_atr: 1.0
+  size_100_atr: 1.7

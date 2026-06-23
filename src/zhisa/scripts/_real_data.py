@@ -126,6 +126,9 @@ def normalize_ohlcv_frame(df: pd.DataFrame, *, keep_extra: bool = False) -> pd.D
     out = out.dropna(subset=list(OHLCV_COLUMNS), how="any")
     out = out[~out.index.duplicated(keep="last")].sort_index()
 
+    if hasattr(df, "attrs"):
+        out.attrs = dict(df.attrs)
+
     errors = validate_ohlcv(out[list(OHLCV_COLUMNS)], strict=True)
     if errors:
         raise ValueError("Invalid OHLCV frame: " + "; ".join(errors))
@@ -202,7 +205,11 @@ def join_futures_context(
         context = context.rename(columns=renamed)
         context_cols = list(context.columns)
 
-    joined = df.join(context[context_cols].reindex(df.index), how="left")
+    # Reindex with forward fill to spread the 8-hour funding rates to 5-minute candles.
+    # A limit of 120 (10 hours of 5-min bars) ensures we don't carry stale data forever
+    # if the stream dies.
+    context_reindexed = context[context_cols].reindex(df.index, method="ffill", limit=120)
+    joined = df.join(context_reindexed, how="left")
     joined.attrs["futures_context"] = {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -244,13 +251,16 @@ def load_market_dataframe(
         path = Path(csv_path)
         if not path.exists():
             raise FileNotFoundError(f"CSV not found: {path}")
-        df = pd.read_csv(path)
+        if path.suffix == ".parquet":
+            df = pd.read_parquet(path)
+        else:
+            df = pd.read_csv(path)
         timestamp_col = str(getattr(args, "timestamp_column", "timestamp"))
         if timestamp_col != "timestamp" and timestamp_col in df.columns:
             df = df.rename(columns={timestamp_col: "timestamp"})
         start = parse_utc_timestamp(getattr(args, "start", None))
         end = parse_utc_timestamp(getattr(args, "end", None))
-        df = normalize_ohlcv_frame(df)
+        df = normalize_ohlcv_frame(df, keep_extra=True)
         if start is not None:
             df = df[df.index >= start]
         if end is not None:
@@ -258,7 +268,7 @@ def load_market_dataframe(
     else:
         raise ValueError(f"Unknown data source: {source!r}")
 
-    df = normalize_ohlcv_frame(df)
+    df = normalize_ohlcv_frame(df, keep_extra=True)
     if bool(getattr(args, "with_futures_context", False)):
         symbol = str(getattr(args, "symbol", "BTC/USDT"))
         timeframe = str(getattr(args, "timeframe", "5m"))

@@ -6,15 +6,16 @@
 # Output: a checkpoint that S2 can load to start from a richer init.
 
 seed: 0
-device: cpu
-epochs: 2
-batch_size: 32
-chart_window: 32
-image_size: 32
+device: cuda
+epochs: 20
+batch_size: 128
+chart_window: 128
+image_size: 128
 
 optim:
   lr: 0.0003
   weight_decay: 0.0001
+  warmup_steps: 100
 
 ssl:
   projection_dim: 64
@@ -27,6 +28,9 @@ ssl:
   weight_alignment: 0.5
   grad_clip: 1.0
   log_every: 50
+  temporal_horizon: 4
+  val_max_batches: 32
+  checkpoint_every_steps: 500
   use_ema_teacher: true
   use_masked_modeling: true
   use_temporal_contrast: true

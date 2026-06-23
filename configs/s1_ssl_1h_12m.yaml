@@ -1,0 +1,31 @@
+# Phase A: broad structural representation on 12 markets at 1h.
+seed: 0
+device: cuda
+epochs: 5
+batch_size: 128
+chart_window: 128
+image_size: 128
+
+optim:
+  lr: 0.0003
+  weight_decay: 0.0001
+  warmup_steps: 500
+
+ssl:
+  projection_dim: 64
+  hidden_dim: 128
+  temperature: 0.1
+  mask_ratio: 0.4
+  ema_decay: 0.996
+  weight_temporal: 1.0
+  weight_masked: 1.0
+  weight_alignment: 0.5
+  grad_clip: 1.0
+  log_every: 50
+  temporal_horizon: 4
+  val_max_batches: 64
+  checkpoint_every_steps: 500
+  use_ema_teacher: true
+  use_masked_modeling: true
+  use_temporal_contrast: true
+  use_cross_modal: true

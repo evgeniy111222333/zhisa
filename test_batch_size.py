@@ -46,7 +46,7 @@ def main():
     loss_fn = MultiTaskLoss(LossWeights()).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
-    batch_sizes = [32, 64, 128, 256, 512]
+    batch_sizes = [128, 256, 512, 1024, 2048]
     results = []
 
     for bs in batch_sizes:

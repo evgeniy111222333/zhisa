@@ -75,11 +75,9 @@ def _numeric_context_columns(df: pd.DataFrame) -> list[str]:
     cols: list[str] = []
     for col in df.columns:
         name = str(col)
-        if name in _OHLCV_COLUMNS:
+        if name in _OHLCV_COLUMNS or name == "timestamp":
             continue
-        values = pd.to_numeric(df[col], errors="coerce")
-        if values.notna().any():
-            cols.append(name)
+        cols.append(name)
     return cols
 
 
@@ -139,6 +137,26 @@ def _add_market_context_features(
             add(f"{name}_log1p", np.log1p(positive))
             add(f"{name}_logret_1", _safe_log(positive).diff())
             handled.add(col)
+
+    # Specific computed features for known critical indicators
+    if "funding_rate" in df.columns:
+        funding_series = series("funding_rate")
+        # 7 days of 5m candles = 7 * 24 * 12 = 2016
+        fr_mean = funding_series.rolling(2016, min_periods=12).mean()
+        fr_std = funding_series.rolling(2016, min_periods=12).std()
+        out["ctx_funding_zscore_7d"] = (funding_series - fr_mean) / (fr_std + 1e-12)
+
+    if "open_interest" in df.columns:
+        oi_series = series("open_interest")
+        oi_mean = oi_series.rolling(2016, min_periods=12).mean()
+        oi_std = oi_series.rolling(2016, min_periods=12).std()
+        out["ctx_oi_zscore_7d"] = (oi_series - oi_mean) / (oi_std + 1e-12)
+
+    if "top_trader_long_short_ratio" in df.columns:
+        ls_series = series("top_trader_long_short_ratio")
+        ls_mean = ls_series.rolling(2016, min_periods=12).mean()
+        ls_std = ls_series.rolling(2016, min_periods=12).std()
+        out["ctx_ls_zscore_7d"] = (ls_series - ls_mean) / (ls_std + 1e-12)
 
     if {"taker_buy_volume", "taker_sell_volume"}.issubset(df.columns):
         buy = series("taker_buy_volume")

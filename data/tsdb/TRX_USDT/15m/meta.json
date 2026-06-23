@@ -1,0 +1,18 @@
+{
+  "instrument": "TRX/USDT",
+  "timeframe": "15m",
+  "start": "2020-10-01T00:00:00+00:00",
+  "end": "2026-06-20T18:30:00+00:00",
+  "row_count": 200429,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 5104324,
+  "checksum": "1a0b64eed63a66b3b3657af863212810",
+  "created_at": "2026-06-20T19:00:26.259826+00:00",
+  "updated_at": "2026-06-20T19:00:26.259826+00:00"
+}

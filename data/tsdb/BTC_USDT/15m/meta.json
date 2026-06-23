@@ -1,0 +1,18 @@
+{
+  "instrument": "BTC/USDT",
+  "timeframe": "15m",
+  "start": "2019-01-01T00:00:00+00:00",
+  "end": "2026-06-20T18:30:00+00:00",
+  "row_count": 261597,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 10694800,
+  "checksum": "737caf8c8218e32221ad241949ff867c",
+  "created_at": "2026-06-20T19:02:22.303189+00:00",
+  "updated_at": "2026-06-20T19:02:22.303189+00:00"
+}

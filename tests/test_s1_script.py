@@ -5,10 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from zhisa.config import load_config
-from zhisa.scripts.train_s1 import _ssl_config_from
+from zhisa.data.dataset import SampleSpec
+from zhisa.scripts.train_s1 import _market_datasets_from_frame, _ssl_config_from
 
 
 def test_s1_config_loads():
@@ -40,6 +43,33 @@ def test_ssl_config_factory_handles_none():
     assert ssl.temperature == 0.1
 
 
+def test_prepared_loader_splits_timestamp_gaps():
+    left = pd.date_range("2024-01-01", periods=220, freq="15min", tz="UTC")
+    right = pd.date_range(left[-1] + pd.Timedelta(hours=3), periods=220, freq="15min", tz="UTC")
+    index = left.append(right)
+    close = np.linspace(100.0, 110.0, len(index))
+    frame = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.ones(len(index)),
+            "symbol": "BTC/USDT",
+        },
+        index=index,
+    )
+    datasets = _market_datasets_from_frame(
+        frame,
+        spec=SampleSpec(chart_window=16, feature_window=16, horizons=(4, 8)),
+        cache_charts=False,
+        chart_cache_size=-1,
+        timeframe="15m",
+    )
+    assert len(datasets) == 2
+    assert all(ds.df.index.to_series().diff().dropna().eq(pd.Timedelta(minutes=15)).all() for ds in datasets)
+
+
 def test_s1_script_runs_smoke(tmp_path):
     """A minimal S1 training run should complete end-to-end and write a checkpoint."""
     out_dir = tmp_path / "artifacts"
@@ -57,3 +87,10 @@ def test_s1_script_runs_smoke(tmp_path):
     assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
     assert "S1 training complete" in result.stdout
     assert (out_dir / "s1_smoke.pt").exists()
+
+
+def test_aws_launcher_uses_absolute_epoch_targets():
+    script = Path("scripts/aws_train_s1_12m.sh").read_text(encoding="utf-8")
+    assert '--epochs "$PHASE1_TARGET"' in script
+    assert '--epochs "$TOTAL_TARGET"' in script
+    assert 'final_completed=$(checkpoint_epochs "$RUN_DIR/phase2_last.pt")' in script
