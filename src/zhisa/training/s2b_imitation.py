@@ -633,6 +633,11 @@ class BehavioralCloningTrainer:
 # ---------------------------------------------------------------------------
 
 
+def _expert_index_for_env_obs(env: TradingEnv) -> int:
+    """Return the df index represented by the latest bar in the current obs."""
+    return max(0, int(env._t) - 1)
+
+
 def _rollout_policy_for_aggregation(
     model: PolicyNetwork,
     env: TradingEnv,
@@ -658,7 +663,7 @@ def _rollout_policy_for_aggregation(
         ep_ret = 0.0
         steps = 0
         for _ in range(max_steps):
-            t = env._t  # absolute bar index in env.df
+            t = _expert_index_for_env_obs(env)
             expert_action = int(expert.predict(env.df, t))
             obs_list.append(obs)
             actions_list.append(expert_action)

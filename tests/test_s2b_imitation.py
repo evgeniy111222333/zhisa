@@ -25,6 +25,8 @@ from zhisa.training.s2b_imitation import (
     DAggerConfig,
     DAggerTrainer,
     _expert_actions_for_dataset,
+    _expert_index_for_env_obs,
+    _rollout_policy_for_aggregation,
 )
 
 
@@ -215,6 +217,42 @@ def test_triple_barrier_expert_does_not_reuse_forward_return_cache(tiny_imitatio
 # ---------------------------------------------------------------------------
 # DAgger
 # ---------------------------------------------------------------------------
+
+
+def test_dagger_expert_labels_latest_visible_bar(tiny_imitation_setup, device):
+    """DAgger labels must align to the observation window, not peek at the
+    next execution bar."""
+    from zhisa.env.trading_env import TradingEnv
+
+    s = tiny_imitation_setup
+
+    class _RecordingExpert:
+        name = "recording"
+
+        def __init__(self):
+            self.indices = []
+
+        def predict(self, df, t):
+            self.indices.append(int(t))
+            return 0
+
+    env = TradingEnv(s["df"], cfg=s["env_cfg"])
+    obs, info = env.reset(seed=0)
+    assert _expert_index_for_env_obs(env) == info["start_index"] - 1
+    assert obs["numeric"].shape[0] == s["env_cfg"].window
+
+    expert = _RecordingExpert()
+    _rollout_policy_for_aggregation(
+        s["model"],
+        env,
+        expert,
+        n_episodes=1,
+        max_steps=1,
+        rng=np.random.default_rng(0),
+        device=torch.device(device),
+    )
+
+    assert expert.indices == [s["env_cfg"].window - 1]
 
 
 def test_dagger_runs_and_aggregates(tiny_imitation_setup, device):
