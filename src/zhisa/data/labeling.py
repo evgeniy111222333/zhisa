@@ -34,6 +34,9 @@ class ForwardReturnConfig:
 
     horizon: int = 16
     flat_return_bps: float = 1.0
+    flat_volatility_mult: float = 0.0
+    flat_min_bps: float = 0.0
+    flat_max_bps: float = 0.0
     log_return: bool = False
 
 
@@ -56,6 +59,12 @@ def forward_return_targets(
         raise ValueError("forward return horizon must be >= 1")
     if cfg.flat_return_bps < 0:
         raise ValueError("flat_return_bps must be >= 0")
+    if cfg.flat_volatility_mult < 0:
+        raise ValueError("flat_volatility_mult must be >= 0")
+    if cfg.flat_min_bps < 0 or cfg.flat_max_bps < 0:
+        raise ValueError("flat_min_bps and flat_max_bps must be >= 0")
+    if cfg.flat_max_bps > 0 and cfg.flat_max_bps < cfg.flat_min_bps:
+        raise ValueError("flat_max_bps must be >= flat_min_bps when set")
     if "close" not in df.columns:
         raise ValueError("DataFrame must contain a 'close' column")
 
@@ -71,7 +80,24 @@ def forward_return_targets(
         else:
             ret[:-cfg.horizon] = future / base - 1.0
 
-    threshold = float(cfg.flat_return_bps) / 10_000.0
+    threshold: float | np.ndarray = float(cfg.flat_return_bps) / 10_000.0
+    if cfg.flat_volatility_mult > 0.0:
+        one_bar_ret = pd.Series(close).pct_change().fillna(0.0)
+        realised = (
+            one_bar_ret.rolling(cfg.horizon, min_periods=2).std(ddof=0)
+            * np.sqrt(cfg.horizon)
+        ).to_numpy(dtype=np.float64)
+        vol_threshold = float(cfg.flat_volatility_mult) * np.nan_to_num(
+            realised,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        threshold = np.maximum(threshold, vol_threshold)
+        if cfg.flat_min_bps > 0.0:
+            threshold = np.maximum(threshold, float(cfg.flat_min_bps) / 10_000.0)
+        if cfg.flat_max_bps > 0.0:
+            threshold = np.minimum(threshold, float(cfg.flat_max_bps) / 10_000.0)
     label = np.zeros(n, dtype=np.int64)
     label[ret > threshold] = 1
     label[ret < -threshold] = -1

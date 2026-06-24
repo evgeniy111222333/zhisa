@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import ConcatDataset, Dataset
 
 from zhisa.config import load_config
-from zhisa.data.dataset import MarketDataset, MarketTargetConfig, SampleSpec
+from zhisa.data.dataset import MacroContextConfig, MarketDataset, MarketTargetConfig, SampleSpec
 from zhisa.data.labeling import TripleBarrierConfig
 from zhisa.data.preparation import load_prepared_split
 from zhisa.models.policy import build_default_policy
@@ -75,6 +75,8 @@ def _market_datasets_from_frame(
     compute_targets: bool = False,
     target_cfg: MarketTargetConfig | None = None,
     triple_barrier_cfg: TripleBarrierConfig | None = None,
+    macro_cfg: MacroContextConfig | None = None,
+    macro_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
 ) -> list[MarketDataset]:
     """Build datasets per symbol and contiguous time segment."""
     if "symbol" not in frame.columns:
@@ -88,6 +90,11 @@ def _market_datasets_from_frame(
     )
     for symbol, symbol_frame in frame.groupby("symbol", sort=True):
         market = symbol_frame.drop(columns=["symbol"]).sort_index()
+        macro_frame = None
+        if macro_frames_by_symbol is not None:
+            if symbol not in macro_frames_by_symbol:
+                raise ValueError(f"missing macro prepared data for symbol {symbol!r}")
+            macro_frame = macro_frames_by_symbol[symbol]
         if max_bars_per_symbol is not None:
             market = market.iloc[:max_bars_per_symbol]
         if expected_delta is None:
@@ -109,6 +116,8 @@ def _market_datasets_from_frame(
                 cache_charts=cache_charts,
                 chart_cache_size=chart_cache_size,
                 compute_targets=compute_targets,
+                macro_cfg=macro_cfg,
+                macro_df=macro_frame,
             )
             feature_dims.add(
                 (ds._features_df.shape[1], ds._time_features_df.shape[1])

@@ -1,50 +1,58 @@
-# S2 market-head training after the 1h -> 15m S1 curriculum.
-seed: 0
+# S2 multi-timeframe training: 15m execution stream + causal closed 1h context.
+#
+# Warm-start this from the current S2 base champion, not from the weaker h4/h16
+# fine-tune. Existing 15m representation and heads are reused; only the 1h
+# macro branch starts fresh.
+seed: 21
 device: cuda
-epochs: 12
-batch_size: 256
+epochs: 14
+batch_size: 192
 workers: 4
 
-# Kept identical to the serious S1 checkpoint contract. When an S1
-# checkpoint is supplied, train_s2 also verifies these values from it.
 chart_window: 128
 image_size: 128
 horizons: [4, 16, 64]
 n_regime_states: 4
 
-freeze_encoder_epochs: 1
-encoder_lr_scale: 0.25
-early_stopping_patience: 2
-early_stopping_min_delta: 0.001
-early_stopping_min_epochs: 4
+macro_context:
+  enabled: true
+  source: prepared
+  window: 64
+  resample_rule: 1h
+  prepared_root: data/prepared/s1_1h_12m_v2
+
+freeze_encoder_epochs: 0
+encoder_lr_scale: 0.15
+early_stopping_patience: 3
+early_stopping_min_delta: 0.0005
+early_stopping_min_epochs: 5
 early_stopping_trend_window: 3
-early_stopping_trend_min_delta: 0.0005
+early_stopping_trend_min_delta: 0.00035
 class_balance: sqrt_inverse
 direction_class_weight_max: 1.55
 direction_flat_class_weight_max: 1.45
 sample_balance: per_symbol_direction
-sample_balance_power: 0.40
+sample_balance_power: 0.45
 sample_balance_max_weight: 3.5
-label_smoothing: 0.02
-grad_clip: 1.0
+label_smoothing: 0.015
+grad_clip: 0.75
 log_every: 50
 eval_every: 1
 val_max_batches: 0
 champion_metric: s2_guarded_score
 champion_mode: max
 segment_validation: true
-guard_min_direction_balanced: 0.34
-guard_min_flat_recall: 0.04
-guard_min_flat_f1: 0.06
-guard_min_volatility_corr: 0.45
-guard_min_return_corr: -0.02
+guard_min_direction_balanced: 0.35
+guard_min_flat_recall: 0.06
+guard_min_flat_f1: 0.08
+guard_min_volatility_corr: 0.60
+guard_min_return_corr: -0.005
 guard_min_persistence_lift: 0.0
 guard_max_prediction_share: 0.62
-guard_max_flat_prediction_share: 0.36
-guard_min_flat_pred_target_ratio: 0.55
+guard_max_flat_prediction_share: 0.34
+guard_min_flat_pred_target_ratio: 0.65
 guard_max_flat_pred_target_ratio: 1.80
 guard_penalty_scale: 0.8
-# Epoch checkpoints preserve exact shuffle/scheduler semantics on resume.
 checkpoint_every_steps: 0
 
 targets:
@@ -68,25 +76,27 @@ targets:
     atr_window: 14
 
 optim:
-  lr: 0.0001
+  lr: 0.00005
   weight_decay: 0.0001
   scheduler: cosine
-  warmup_steps: 1000
-  t_max: 78000
+  warmup_steps: 700
+  t_max: 52000
 
 loss_weights:
-  direction: 1.0
-  direction_multi: 0.35
-  volatility: 0.5
-  regime: 0.3
-  return_pred: 0.8
-  return_multi: 0.35
-  risk: 0.25
+  direction: 0.85
+  direction_multi: 0.80
+  volatility: 0.40
+  regime: 0.25
+  return_pred: 0.40
+  return_multi: 0.80
+  risk: 0.20
   policy: 0.0
   value: 0.0
   uncertainty: 0.0
 
-return_direction_weight: 0.25
+direction_multi_horizon_weights: [1.00, 0.85, 0.08]
+return_multi_horizon_weights: [1.00, 0.75, 0.03]
+return_direction_weight: 0.60
 return_corr_weight: 0.05
 volatility_log_weight: 0.35
 volatility_corr_weight: 0.10

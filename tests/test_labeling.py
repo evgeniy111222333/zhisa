@@ -68,6 +68,62 @@ def test_forward_return_targets_are_not_long_only_triple_barrier_labels():
     assert abs(asymmetric_down_share - forward_down_share) > 0.15
 
 
+def test_forward_return_targets_can_use_adaptive_flat_deadband():
+    index = pd.date_range("2024-01-01", periods=320, freq="15min", tz="UTC")
+    x = np.arange(len(index), dtype=np.float64)
+    close = 100.0 + 0.015 * x + 0.15 * np.sin(x / 5.0)
+    high_vol_close = 100.0 + 0.015 * x + 1.2 * np.sin(x / 2.0)
+    base = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 0.25,
+            "low": close - 0.25,
+            "close": close,
+            "volume": np.ones_like(close),
+        },
+        index=index,
+    )
+    high_vol = base.copy()
+    high_vol["close"] = high_vol_close
+    high_vol["open"] = high_vol_close
+    high_vol["high"] = high_vol_close + 0.25
+    high_vol["low"] = high_vol_close - 0.25
+
+    fixed = ForwardReturnConfig(horizon=16, flat_return_bps=8.0)
+    adaptive = ForwardReturnConfig(
+        horizon=16,
+        flat_return_bps=8.0,
+        flat_volatility_mult=0.20,
+        flat_min_bps=8.0,
+        flat_max_bps=45.0,
+    )
+
+    fixed_low = forward_return_targets(base, fixed)
+    fixed_high = forward_return_targets(high_vol, fixed)
+    adaptive_low = forward_return_targets(base, adaptive)
+    adaptive_high = forward_return_targets(high_vol, adaptive)
+
+    fixed_gap = abs(float((fixed_high["label"] == 0).mean()) - float((fixed_low["label"] == 0).mean()))
+    adaptive_gap = abs(float((adaptive_high["label"] == 0).mean()) - float((adaptive_low["label"] == 0).mean()))
+
+    assert float((adaptive_high["label"] == 0).mean()) > float((fixed_high["label"] == 0).mean())
+    assert adaptive_gap < fixed_gap
+
+
+def test_forward_return_targets_reject_invalid_adaptive_flat_config(small_market):
+    with pytest.raises(ValueError, match="flat_max_bps"):
+        forward_return_targets(
+            small_market,
+            ForwardReturnConfig(
+                horizon=4,
+                flat_return_bps=1.0,
+                flat_volatility_mult=0.1,
+                flat_min_bps=20.0,
+                flat_max_bps=10.0,
+            ),
+        )
+
+
 def test_triple_barrier_no_lookahead(small_market):
     """Mutating the future must not change the label at index t."""
     out = triple_barrier(small_market, TripleBarrierConfig(max_holding=8))

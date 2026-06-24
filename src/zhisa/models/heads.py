@@ -15,6 +15,7 @@ class HeadsConfig:
     n_direction_classes: int = 3   # -1, 0, +1
     n_regime_classes: int = 4
     n_actions: int = 9             # discrete actions
+    n_market_horizons: int = 0
     hidden_dim: int = 128
     dropout: float = 0.1
 
@@ -36,13 +37,21 @@ class MultiTaskHeads(nn.Module):
         self.volatility = nn.Linear(cfg.hidden_dim, 1)
         self.risk = nn.Linear(cfg.hidden_dim, 1)
         self.return_pred = nn.Linear(cfg.hidden_dim, 1)
+        self.direction_multi = (
+            nn.Linear(cfg.hidden_dim, cfg.n_market_horizons * cfg.n_direction_classes)
+            if cfg.n_market_horizons > 0 else None
+        )
+        self.return_multi = (
+            nn.Linear(cfg.hidden_dim, cfg.n_market_horizons)
+            if cfg.n_market_horizons > 0 else None
+        )
         self.policy_logits = nn.Linear(cfg.hidden_dim, cfg.n_actions)
         self.value = nn.Linear(cfg.hidden_dim, 1)
         self.uncertainty_logit = nn.Linear(cfg.hidden_dim, 1)
 
     def forward(self, z: torch.Tensor) -> dict:
         h = self.shared(z)
-        return {
+        out = {
             "direction": self.direction(h),
             "regime": self.regime(h),
             "volatility": self.volatility(h).squeeze(-1),
@@ -52,3 +61,12 @@ class MultiTaskHeads(nn.Module):
             "value": self.value(h).squeeze(-1),
             "uncertainty_logit": self.uncertainty_logit(h).squeeze(-1),
         }
+        if self.direction_multi is not None:
+            out["direction_multi"] = self.direction_multi(h).view(
+                z.size(0),
+                self.cfg.n_market_horizons,
+                self.cfg.n_direction_classes,
+            )
+        if self.return_multi is not None:
+            out["return_multi"] = self.return_multi(h)
+        return out

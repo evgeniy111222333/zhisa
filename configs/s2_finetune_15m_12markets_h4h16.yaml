@@ -1,0 +1,92 @@
+# S2 fine-tune from a trained S2 checkpoint.
+#
+# Goal: improve S2 as a representation stage, not as a live policy.
+# The previous full S2 learned volatility/risk well but direction/return were
+# weak, especially on h64. This config keeps the learned representation and
+# re-weights the noisy supervised heads toward horizons that showed measurable
+# signal in stage-readiness diagnostics.
+seed: 13
+device: cuda
+epochs: 6
+batch_size: 256
+workers: 4
+
+chart_window: 128
+image_size: 128
+horizons: [4, 16, 64]
+n_regime_states: 4
+
+freeze_encoder_epochs: 0
+encoder_lr_scale: 0.10
+early_stopping_patience: 2
+early_stopping_min_delta: 0.0005
+class_balance: sqrt_inverse
+sample_balance: per_symbol_direction
+sample_balance_power: 0.45
+sample_balance_max_weight: 3.5
+label_smoothing: 0.015
+grad_clip: 0.75
+log_every: 50
+eval_every: 1
+val_max_batches: 0
+champion_metric: s2_guarded_score
+champion_mode: max
+segment_validation: true
+guard_min_direction_balanced: 0.35
+guard_min_flat_recall: 0.06
+guard_min_flat_f1: 0.08
+guard_min_volatility_corr: 0.60
+guard_min_return_corr: -0.005
+guard_max_prediction_share: 0.62
+guard_max_flat_prediction_share: 0.34
+guard_min_flat_pred_target_ratio: 0.65
+guard_max_flat_pred_target_ratio: 1.80
+guard_penalty_scale: 0.8
+checkpoint_every_steps: 0
+
+targets:
+  direction_mode: forward_return
+  flat_return_bps: 8.0
+  flat_volatility_mult: 0.10
+  flat_min_bps: 8.0
+  flat_max_bps: 35.0
+  use_log_return: false
+  triple_barrier:
+    tp_atr_mult: 2.0
+    sl_atr_mult: 2.0
+    max_holding: 32
+    atr_window: 14
+
+optim:
+  lr: 0.00003
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_steps: 500
+  t_max: 39000
+
+loss_weights:
+  direction: 0.8
+  direction_multi: 0.75
+  volatility: 0.35
+  regime: 0.25
+  return_pred: 0.35
+  return_multi: 0.75
+  risk: 0.18
+  policy: 0.0
+  value: 0.0
+  uncertainty: 0.0
+
+# h64 was near-noise in diagnostics. Keep a tiny anchor so the head does not
+# become arbitrary, but do not let it dominate gradients.
+direction_multi_horizon_weights: [1.00, 0.80, 0.05]
+return_multi_horizon_weights: [1.00, 0.70, 0.02]
+
+# Signed-return magnitude is noisy, so use sign supervision as the primary
+# useful return signal during fine-tune.
+return_direction_weight: 0.60
+
+target_scales:
+  return: 100.0
+  value: 100.0
+  volatility: 1.0
+  risk: 1.0
