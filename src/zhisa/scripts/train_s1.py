@@ -1,4 +1,4 @@
-"""Train the S1 self-supervised policy on a market dataset.
+﻿"""Train the S1 self-supervised policy on a market dataset.
 
 Produces a checkpoint at ``--checkpoint`` (default ``artifacts/s1/model.pt``)
 that the S2 supervised trainer can resume from.
@@ -19,7 +19,15 @@ from zhisa.config import load_config
 from zhisa.data.dataset import MacroContextConfig, MarketDataset, MarketTargetConfig, SampleSpec
 from zhisa.data.labeling import TripleBarrierConfig
 from zhisa.data.preparation import load_prepared_split
+from zhisa.data.render_job import materialize_parallel
+from zhisa.data.render_contract import (
+    enforce_parent_render_contract,
+    load_checkpoint,
+    resolve_render_contract,
+)
+from zhisa.features.normalization import NormalizationSpec
 from zhisa.models.policy import build_default_policy
+from zhisa.rendering.spec import RenderSpec
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.training.s1_ssl import SSLPretrainer, SSLConfig
 from zhisa.utils.seeding import set_seed
@@ -61,7 +69,33 @@ def _ssl_config_from(cfg) -> SSLConfig:
         use_masked_modeling=bool(s.get("use_masked_modeling", True)),
         use_temporal_contrast=bool(s.get("use_temporal_contrast", True)),
         use_cross_modal=bool(s.get("use_cross_modal", True)),
+        augment_transforms=tuple(
+            str(x) for x in (s.get("augment_transforms", []) or [])
+        ),
+        augment_strength=float(s.get("augment_strength", 0.05)),
+        augment_crop_frac=float(s.get("augment_crop_frac", 0.85)),
+        augment_noise_std=float(s.get("augment_noise_std", 0.01)),
     )
+
+
+
+def _policy_kwargs_from(cfg, *, n_instruments: int, spec) -> dict:
+    """Merge optional YAML `model:` block into build_default_policy kwargs."""
+    m = (cfg.get("model", {}) or {}) if cfg else {}
+    kwargs = dict(
+        window=spec.chart_window,
+        image_size=spec.image_size,
+        n_actions=9,
+        n_regime_classes=spec.n_regime_states,
+        n_instruments=int(n_instruments),
+    )
+    for key, value in m.items():
+        if key in ("in_numeric_features", "in_context_features"):
+            continue
+        if key == "vision_channels":
+            value = tuple(int(x) for x in value)
+        kwargs[key] = value
+    return kwargs
 
 
 def _market_datasets_from_frame(
@@ -77,17 +111,36 @@ def _market_datasets_from_frame(
     triple_barrier_cfg: TripleBarrierConfig | None = None,
     macro_cfg: MacroContextConfig | None = None,
     macro_frames_by_symbol: dict[str, pd.DataFrame] | None = None,
+    charts_cache_dir: str | None = None,
+    render_spec: RenderSpec | None = None,
+    render_workers: int = 0,
+    render_chunk: int = 5_000,
+    normalization: NormalizationSpec | None = None,
+    render_engine: str = "cpu",
+    instruments: list[str] | None = None,
 ) -> list[MarketDataset]:
-    """Build datasets per symbol and contiguous time segment."""
+    """Build datasets per symbol and contiguous time segment.
+
+    When ``charts_cache_dir`` is provided the ideal compute-free path is used:
+    charts are compiled in advance into a :class:`CompiledChartStore` (memmap,
+    content-addressed, reused across runs) and handed to the dataset, so the
+    training DataLoader performs zero rasterisation.
+    """
     if "symbol" not in frame.columns:
         raise ValueError("prepared split must contain a 'symbol' column")
     datasets: list[MarketDataset] = []
+    render_metas: list[dict] = []
     feature_dims: set[tuple[int, int]] = set()
     expected_delta = (
         pd.Timedelta(minutes=Timeframe.from_str(timeframe).minutes)
         if timeframe
         else None
     )
+    if render_spec is None:
+        render_spec = RenderSpec(size=spec.image_size)
+    instrument_id_by_symbol: dict = {}
+    if instruments:
+        instrument_id_by_symbol = {sym: i for i, sym in enumerate(instruments)}
     for symbol, symbol_frame in frame.groupby("symbol", sort=True):
         market = symbol_frame.drop(columns=["symbol"]).sort_index()
         macro_frame = None
@@ -108,6 +161,22 @@ def _market_datasets_from_frame(
                 continue
             segment = segment.copy()
             segment.name = f"{symbol}#segment-{segment_id}"
+            chart_source = None
+            if charts_cache_dir:
+                seg_len = max(0, len(segment) - spec.chart_window - max(spec.horizons, default=0) - 1)
+                store, _ = materialize_parallel(
+                    segment,
+                    window=spec.chart_window,
+                    spec=render_spec,
+                    n=seg_len,
+                    out_root=charts_cache_dir,
+                    workers=render_workers,
+                    chunk_size=render_chunk,
+                    engine=render_engine,
+                )
+                chart_source = store
+                render_metas.append(store.render_meta)
+            _instr_id = instrument_id_by_symbol.get(symbol, 0)
             ds = MarketDataset(
                 segment,
                 spec=spec,
@@ -118,6 +187,9 @@ def _market_datasets_from_frame(
                 compute_targets=compute_targets,
                 macro_cfg=macro_cfg,
                 macro_df=macro_frame,
+                chart_source=chart_source,
+                normalization=normalization,
+                instrument_id=_instr_id,
             )
             feature_dims.add(
                 (ds._features_df.shape[1], ds._time_features_df.shape[1])
@@ -178,6 +250,34 @@ def main(argv: list[str] | None = None) -> int:
         default=-1,
         help="Lazy chart LRU size; -1 disables it (recommended for large S1 data)",
     )
+    parser.add_argument(
+        "--charts-cache-dir",
+        type=str,
+        default=None,
+        help="Compile charts into a content-addressed CompiledChartStore (memmap) "
+        "under this dir and serve the trainer from disk (zero in-loop rendering). "
+        "Built once per dataset identity, reuses prefixes incrementally on data "
+        "growth, and is reused on later runs.",
+    )
+    parser.add_argument(
+        "--render-workers",
+        type=int,
+        default=0,
+        help="Parallel chart-compile workers (> 0 enables multiprocessing; 0 = serial)",
+    )
+    parser.add_argument(
+        "--render-chunk",
+        type=int,
+        default=5_000,
+        help="Rows per worker task during compiled chart materialisation",
+    )
+    parser.add_argument("--normalize-mode", type=str, default=None,
+                        choices=["rolling_z", "robust_z"],
+                        help="Feature normalization mode (default: rolling_z)")
+    parser.add_argument("--normalize-lookback", type=int, default=None)
+    parser.add_argument("--render-engine", type=str, default="cpu",
+                        choices=["cpu", "gpu"],
+                        help="Chart compile engine (gpu requires CUDA; parity-gated)")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
 
@@ -191,6 +291,14 @@ def main(argv: list[str] | None = None) -> int:
 
     seed = int(cfg.get("seed", 0)) if cfg else 0
     set_seed(seed)
+    def _norm_spec_from(args, cfg):
+        _nm = (cfg.get("normalize", {}) or {}) if cfg else {}
+        return NormalizationSpec(
+            mode=str(args.normalize_mode or _nm.get("mode", "rolling_z")),
+            lookback=int(args.normalize_lookback or _nm.get("lookback", 256)),
+        )
+
+    norm_spec = _norm_spec_from(args, cfg)
 
     # Data
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
@@ -213,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         train_frame = load_prepared_split(prepared_root, args.train_split)
         train_rows = len(train_frame)
         train_markets = int(train_frame["symbol"].nunique())
+        train_symbols = sorted(train_frame["symbol"].unique())
         datasets = _market_datasets_from_frame(
             train_frame,
             spec=spec,
@@ -220,6 +329,13 @@ def main(argv: list[str] | None = None) -> int:
             chart_cache_size=args.chart_cache_size,
             max_bars_per_symbol=args.prepared_max_bars_per_symbol,
             timeframe=prepared_timeframe,
+            charts_cache_dir=args.charts_cache_dir,
+            render_spec=RenderSpec(size=spec.image_size),
+            render_workers=args.render_workers,
+            render_chunk=args.render_chunk,
+            render_engine=args.render_engine,
+            normalization=norm_spec,
+            instruments=train_symbols,
         )
         del train_frame
         if not args.no_validation:
@@ -231,6 +347,13 @@ def main(argv: list[str] | None = None) -> int:
                 chart_cache_size=args.chart_cache_size,
                 max_bars_per_symbol=args.prepared_max_bars_per_symbol,
                 timeframe=prepared_timeframe,
+                charts_cache_dir=args.charts_cache_dir,
+                render_spec=RenderSpec(size=spec.image_size),
+                render_workers=args.render_workers,
+                render_chunk=args.render_chunk,
+                render_engine=args.render_engine,
+                normalization=norm_spec,
+                instruments=train_symbols,
             )
             del val_frame
             val_ds = _concat(val_datasets)
@@ -262,18 +385,22 @@ def main(argv: list[str] | None = None) -> int:
         if not datasets:
             raise ValueError("No valid datasets loaded. Check your data source.")
 
+    _nm = (cfg.get("normalize", {}) or {}) if cfg else {}
+    norm_spec = NormalizationSpec(
+        mode=str(args.normalize_mode or _nm.get("mode", "rolling_z")),
+        lookback=int(args.normalize_lookback or _nm.get("lookback", 256)),
+    )
+
     ds = _concat(datasets)
     first_ds = datasets[0]
 
     # Model
     n_feat = first_ds._features_df.shape[1]
+    n_instruments = len(train_symbols) if args.prepared_root else 1
     model = build_default_policy(
         in_numeric_features=n_feat,
         in_context_features=first_ds._time_features_df.shape[1],
-        window=spec.chart_window,
-        image_size=spec.image_size,
-        n_actions=9,
-        n_regime_classes=spec.n_regime_states,
+        **_policy_kwargs_from(cfg, n_instruments=n_instruments, spec=spec),
     )
 
     # SSL config
@@ -291,6 +418,37 @@ def main(argv: list[str] | None = None) -> int:
         ssl_cfg.dataset_root = str(Path(args.prepared_root).resolve())
         ssl_cfg.dataset_timeframe = str(manifest["timeframe"])
         ssl_cfg.dataset_manifest_checksum = str(manifest["output_checksum"])
+    # Render provenance / byte-equivalence contract from the compiled store.
+    render_sources = [
+        ds._chart_source
+        for ds in datasets
+        if getattr(ds, "_chart_source", None) is not None
+    ]
+    if render_sources:
+        fingerprints = {s.render_meta["fingerprint"] for s in render_sources}
+        if len(fingerprints) != 1:
+            raise RuntimeError(
+                "compiled chart stores use inconsistent render identities across "
+                f"segments: {sorted(fingerprints)[:4]}"
+            )
+        m = render_sources[0].render_meta
+        ssl_cfg.renderer_version = str(m.get("renderer"))
+        ssl_cfg.render_spec_hash = str(m.get("spec_hash"))
+        ssl_cfg.render_fingerprint = str(m.get("fingerprint"))
+        ssl_cfg.render_store_checksum = str(render_sources[0].render_checksum())
+        print(
+            "Render contract: "
+            f"renderer={ssl_cfg.renderer_version} "
+            f"spec={ssl_cfg.render_spec_hash[:12]} "
+            f"fp={ssl_cfg.render_fingerprint[:12]} "
+            f"checksum={ssl_cfg.render_store_checksum[:12]}"
+        )
+    render_contract_actual = resolve_render_contract(datasets, spec.image_size)
+    if args.resume_from:
+        _rp = load_checkpoint(args.resume_from)
+        enforce_parent_render_contract(
+            render_contract_actual, _rp, stage_label="S1-resume"
+        )
     if val_ds is not None:
         checkpoint = Path(args.checkpoint)
         ssl_cfg.best_checkpoint = args.best_checkpoint or str(

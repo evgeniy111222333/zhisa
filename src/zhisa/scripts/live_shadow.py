@@ -71,6 +71,8 @@ async def _run(args: argparse.Namespace) -> dict:
         profile=args.profile,
         benchmark_symbol=args.benchmark_symbol,
         seed=int(args.seed),
+        checkpoint=args.checkpoint,
+        device=args.device,
     )
     engine = LiveShadowEngine(broker, cfg)
     try:
@@ -110,8 +112,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration-sec", type=float, default=60.0)
     parser.add_argument("--max-events", type=int, default=0)
     parser.add_argument("--out", type=str, default="artifacts/live_shadow")
-    parser.add_argument("--strategy", choices=["regime", "momentum", "hold", "random"], default="regime")
-    parser.add_argument("--min-bars", type=int, default=96)
+    parser.add_argument("--strategy", choices=["s2b", "regime", "momentum", "hold", "random"], default="s2b")
+    parser.add_argument("--checkpoint", type=str, default="artifacts/s2b/s2b_mtf_champion_v2.pt")
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--min-bars", type=int, default=1)
     parser.add_argument("--horizon-bars", type=int, default=12)
     parser.add_argument("--max-bars-per-symbol", type=int, default=2500)
     parser.add_argument("--profile", type=str, default="auto")

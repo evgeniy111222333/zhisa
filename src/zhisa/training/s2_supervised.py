@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
 from torch.optim import AdamW
 
@@ -52,6 +53,8 @@ class TrainConfig:
     dataset_root: Optional[str] = None
     dataset_timeframe: Optional[str] = None
     dataset_manifest_checksum: Optional[str] = None
+    # Render provenance / byte-equivalence identity (see data.render_contract).
+    render_contract: Optional[dict] = None
     target_config: dict = field(default_factory=dict)
     champion_metric: str = "s2_composite_score"
     champion_mode: str = "max"
@@ -67,6 +70,12 @@ class TrainConfig:
     guard_min_flat_pred_target_ratio: float = 0.0
     guard_max_flat_pred_target_ratio: float = 10.0
     guard_penalty_scale: float = 0.0
+    direction_distill_weight: float = 0.0
+    direction_multi_distill_weight: float = 0.0
+    direction_distill_temperature: float = 2.0
+    flat_ratio_regularization_weight: float = 0.0
+    flat_ratio_min: float = 0.0
+    flat_ratio_max: float = 10.0
     optim: OptimConfig = field(default_factory=OptimConfig)
 
 
@@ -188,6 +197,7 @@ class SupervisedTrainer:
         loss: MultiTaskLoss,
         cfg: TrainConfig,
         train_sample_weights: Optional[torch.Tensor] = None,
+        teacher_model: Optional[PolicyNetwork] = None,
     ) -> None:
         self.model = model
         self.loss = loss
@@ -198,12 +208,62 @@ class SupervisedTrainer:
         self.opt = self._build_optimizer()
         self.sched = build_scheduler(self.opt, cfg.optim)
         self.train_sample_weights = train_sample_weights.detach().cpu().float() if train_sample_weights is not None else None
+        self.teacher_model = teacher_model
+        if self.teacher_model is not None:
+            self.teacher_model.to(self.device)
+            self.teacher_model.eval()
+            for parameter in self.teacher_model.parameters():
+                parameter.requires_grad_(False)
         self._step = 0
         self._completed_epochs = 0
         self._history: list[dict] = []
         self._best_val_total = float("inf")
         self._best_val_metric = float("-inf") if cfg.champion_mode == "max" else float("inf")
         self._early_stopping_bad_epochs = 0
+
+    def seed_best_from_validation(
+        self,
+        val_ds: MarketDataset,
+        *,
+        label: str = "baseline",
+        save_checkpoint: bool = True,
+    ) -> dict:
+        """Use the current model as the validation champion before training.
+
+        Fine-tunes usually start from an existing champion. Without seeding the
+        best metric, the first fine-tune epoch can become "best" even when it
+        is worse than the warm-start checkpoint. This method makes the baseline
+        an explicit competitor in the same validation contract as later epochs.
+        """
+        metrics = self.evaluate(val_ds)
+        val_total = float(metrics.get("total", float("inf")))
+        val_champion = float(metrics.get(self.cfg.champion_metric, val_total))
+        if not math.isfinite(val_champion):
+            raise RuntimeError(
+                f"cannot seed S2 best from non-finite {self.cfg.champion_metric}: "
+                f"{val_champion}"
+            )
+        self._best_val_metric = val_champion
+        self._best_val_total = val_total
+        self._early_stopping_bad_epochs = 0
+        self._history.append({
+            "epoch": self._completed_epochs - 1,
+            "baseline": label,
+            "loss": None,
+            "elapsed_s": 0.0,
+            "encoder_trainable": False,
+            "val": metrics,
+        })
+        if save_checkpoint and self.cfg.best_checkpoint:
+            self.save(self.cfg.best_checkpoint)
+        logger.info(
+            "seeded S2 best from %s: %s=%.6f val_total=%.6f",
+            label,
+            self.cfg.champion_metric,
+            self._best_val_metric,
+            self._best_val_total,
+        )
+        return metrics
 
     def _build_optimizer(self) -> AdamW:
         encoder_prefixes = (
@@ -304,6 +364,7 @@ class SupervisedTrainer:
                     macro_numeric=batch_d["macro_numeric"],
                 )
                 losses = self.loss(out, batch_d)
+                self._add_finetune_regularizers(losses, out, batch_d)
                 loss = losses["total"]
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -416,6 +477,77 @@ class SupervisedTrainer:
         if self.cfg.champion_mode == "min":
             return value < best
         raise ValueError(f"champion_mode must be 'max' or 'min', got {self.cfg.champion_mode!r}")
+
+    def _add_finetune_regularizers(
+        self,
+        losses: dict[str, torch.Tensor],
+        outputs: dict[str, torch.Tensor],
+        batch: dict,
+    ) -> None:
+        """Attach teacher and ratio regularizers used by guarded fine-tunes."""
+        extras: list[tuple[str, torch.Tensor, float]] = []
+        cfg = self.cfg
+        if self.teacher_model is not None and (
+            cfg.direction_distill_weight > 0.0
+            or cfg.direction_multi_distill_weight > 0.0
+        ):
+            with torch.no_grad():
+                teacher = self.teacher_model(
+                    chart=batch["chart"],
+                    numeric=batch["numeric"],
+                    context=batch["context"],
+                    macro_numeric=batch["macro_numeric"],
+                )
+            temperature = max(1e-6, float(cfg.direction_distill_temperature))
+            if cfg.direction_distill_weight > 0.0 and "direction" in outputs and "direction" in teacher:
+                distill = F.kl_div(
+                    F.log_softmax(outputs["direction"] / temperature, dim=-1),
+                    F.softmax(teacher["direction"] / temperature, dim=-1),
+                    reduction="batchmean",
+                ) * (temperature * temperature)
+                extras.append(("direction_distill", distill, float(cfg.direction_distill_weight)))
+            if (
+                cfg.direction_multi_distill_weight > 0.0
+                and "direction_multi" in outputs
+                and "direction_multi" in teacher
+            ):
+                student_multi = outputs["direction_multi"]
+                teacher_multi = teacher["direction_multi"]
+                distill_multi = F.kl_div(
+                    F.log_softmax(student_multi.reshape(-1, student_multi.size(-1)) / temperature, dim=-1),
+                    F.softmax(teacher_multi.reshape(-1, teacher_multi.size(-1)) / temperature, dim=-1),
+                    reduction="batchmean",
+                ) * (temperature * temperature)
+                extras.append((
+                    "direction_multi_distill",
+                    distill_multi,
+                    float(cfg.direction_multi_distill_weight),
+                ))
+        if cfg.flat_ratio_regularization_weight > 0.0 and "direction" in outputs:
+            label_dir = batch.get("label_dir")
+            if label_dir is not None:
+                target_flat_share = (label_dir.to(outputs["direction"].device) == 0).float().mean()
+                pred_flat_share = torch.softmax(outputs["direction"], dim=-1)[:, 1].mean()
+                lower = target_flat_share * float(cfg.flat_ratio_min)
+                upper = target_flat_share * float(cfg.flat_ratio_max)
+                flat_ratio_loss = (
+                    torch.relu(lower - pred_flat_share).pow(2)
+                    + torch.relu(pred_flat_share - upper).pow(2)
+                )
+                extras.append((
+                    "flat_ratio_regularization",
+                    flat_ratio_loss,
+                    float(cfg.flat_ratio_regularization_weight),
+                ))
+        if not extras:
+            return
+        total = losses.get("total")
+        if total is None:
+            total = torch.zeros((), device=extras[0][1].device)
+        for name, value, weight in extras:
+            losses[name] = value
+            total = total + weight * value
+        losses["total"] = total
 
     @torch.no_grad()
     def evaluate(self, ds: MarketDataset) -> dict:
@@ -664,7 +796,7 @@ class SupervisedTrainer:
                 "best_val_metric": self._best_val_metric,
                 "early_stopping_bad_epochs": self._early_stopping_bad_epochs,
             },
-            "checkpoint_meta": {
+"checkpoint_meta": {
                 "stage": "s2_supervised",
                 "trading_policy_ready": False,
                 "policy_head_trained": False,
@@ -675,6 +807,7 @@ class SupervisedTrainer:
                     "timeframe": self.cfg.dataset_timeframe,
                     "manifest_checksum": self.cfg.dataset_manifest_checksum,
                 },
+                "render": self.cfg.render_contract,
                 "target_config": self.cfg.target_config,
                 "champion_metric": self.cfg.champion_metric,
                 "champion_mode": self.cfg.champion_mode,

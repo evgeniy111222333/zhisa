@@ -12,6 +12,7 @@ from zhisa.backtest.engine import run_backtest
 from zhisa.backtest.reports import print_metrics
 from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
+from zhisa.data.render_contract import assert_serving_render
 from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.utils.seeding import set_seed
@@ -66,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         policy = _model_policy(model)
         env_cfg.window = int(cfg.get("window", env_cfg.window))
         env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        assert_serving_render(ckpt, env_cfg.image_size)
     if policy is None:
         rng = np.random.default_rng(0)
         def policy(_obs):

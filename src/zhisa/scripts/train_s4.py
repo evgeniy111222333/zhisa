@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from zhisa.config import load_config
+from zhisa.data.render_contract import default_spec_contract, enforce_parent_render_contract
 from zhisa.env.trading_env import TradingEnv
 from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
@@ -150,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         model.cfg.in_numeric_features, model.cfg.in_context_features,
     ):
         raise ValueError("checkpoint observation dimensions do not match TradingEnv")
+    render_contract = default_spec_contract(model.cfg.image_size)
+    enforce_parent_render_contract(render_contract, payload, stage_label="S2")
+
 
     optim_raw = (cfg.get("optim", {}) if cfg else {}) or {}
     checkpoint = Path(args.checkpoint)
@@ -182,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         source_checkpoint=str(Path(init_path).resolve()) if init_path else None,
         dataset_root=data_meta["root"] if data_meta else None,
         dataset_manifest_checksum=data_meta["manifest_checksum"] if data_meta else None,
+        render_contract=render_contract.to_dict(),
         eval_every_iterations=int(cfg.get("eval_every_iterations", 0) if cfg else 0),
         eval_episodes=int(cfg.get("eval_episodes", 12) if cfg else 12),
         early_stopping_patience=int(cfg.get("early_stopping_patience", 0) if cfg else 0),

@@ -70,6 +70,9 @@ zhisa-monitor-real-data = "zhisa.scripts.monitor_real_data:main"
 zhisa-paper-run = "zhisa.scripts.paper_run:main"
 zhisa-prepare-s1-data = "zhisa.scripts.prepare_s1_data:main"
 zhisa-audit-model = "zhisa.scripts.audit_model:main"
+zhisa-check-render-contract = "zhisa.scripts.check_render_contract:main"
+zhisa-refresh-charts = "zhisa.scripts.refresh_charts:main"
+zhisa-warm-start-vision-v2 = "zhisa.scripts.warm_start_vision_v2:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -85,6 +88,7 @@ markers = [
     "slow: slow tests",
     "benchmark: benchmark tests",
     "integration: integration tests",
+    "gpu: GPU-accelerated tests (require CUDA)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

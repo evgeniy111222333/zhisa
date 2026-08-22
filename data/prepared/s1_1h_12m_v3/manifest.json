@@ -1,0 +1,86 @@
+{
+  "version": "v1",
+  "symbols": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "ADA/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+    "LINK/USDT",
+    "AVAX/USDT",
+    "LTC/USDT",
+    "DOT/USDT",
+    "TRX/USDT"
+  ],
+  "timeframe": "1h",
+  "rows_total": 601572,
+  "rows_per_symbol": {
+    "BTC/USDT": 50131,
+    "ETH/USDT": 50131,
+    "SOL/USDT": 50131,
+    "BNB/USDT": 50131,
+    "ADA/USDT": 50131,
+    "XRP/USDT": 50131,
+    "DOGE/USDT": 50131,
+    "LINK/USDT": 50131,
+    "AVAX/USDT": 50131,
+    "LTC/USDT": 50131,
+    "DOT/USDT": 50131,
+    "TRX/USDT": 50131
+  },
+  "gap_policy": {
+    "max_ffill_bars": 4,
+    "drop_long_gaps": true,
+    "require_monotonic": true
+  },
+  "coverage_policy": {
+    "start": null,
+    "end": null,
+    "min_bars": 1000
+  },
+  "start": "2020-10-01 00:00:00+00:00",
+  "end": "2026-06-20 18:00:00+00:00",
+  "feature_columns": [
+    "beta_256",
+    "beta_64",
+    "close",
+    "corr_256",
+    "corr_64",
+    "high",
+    "low",
+    "open",
+    "rel_logret_1",
+    "volume"
+  ],
+  "input_checksums": {
+    "BTC/USDT": "f88db1a4121b1a200ef8fa04010b71172f6a987052dbb7a999298467142c3b12",
+    "ETH/USDT": "ce324b029b2a1ab387e05023acf0dad45ca2d351cedcb360e4cb9f44109a6704",
+    "SOL/USDT": "80124df1f3398ef2f014a5bdd6cc2ed0f6db3553bc15d2e55fb7ac5f2fb1b826",
+    "BNB/USDT": "49d48c8373ed35f9e8242ded597b5b14fe7c703f1c8ac8faa9319a10129b42ac",
+    "ADA/USDT": "a968fcd8e3f222e78e48df0c1aceaeddbd4e827adaf7e9c4631e68e204472bb1",
+    "XRP/USDT": "912f4669a3c8883b83e7b8f458e099bf7a90cb3d28308ffabfc633ea72daf02b",
+    "DOGE/USDT": "b2fd30045bd385ce620087a8c3d824d859948411baa1aca12524877dce4f3234",
+    "LINK/USDT": "e8c568d81214e19fbe34b22cf7e692ca39192fbfb0017827a4b0f7d94f00247c",
+    "AVAX/USDT": "a62a0e2e52d47c862385633a38e493aa473a7632f57c7484e35f5fd8ce30b80d",
+    "LTC/USDT": "3f032ea1eec983d604e45671aaf821a06414bd8c934c0f5d728ab17e6e5f45b3",
+    "DOT/USDT": "6f6ca1b633b65188e0b26f780f22dc5d568bc868aa6d55211159a8feb6779d6c",
+    "TRX/USDT": "cf59e145ac69bb53a4f2581983f5422b0631c0360ae17440f517b08b6874b0bf"
+  },
+  "output_checksums": {
+    "BTC/USDT": "94768a28740024020be66ed819cea72ba6f16d7d0530ea5d61038ed07b74c292",
+    "ETH/USDT": "9b20ed48b76fb718c852f4c5be9521c627d220a300a76f0011ed147c117998d2",
+    "SOL/USDT": "d2707db5b306f8e27983bdeadf8a9a9d2d51812d7d57f63c7b1cf34b32dc5671",
+    "BNB/USDT": "a947737231bd68923b217362180d30fcc5e1371f2d0b54ed265805285e0eabb1",
+    "ADA/USDT": "a630da20c8ea4f32ff57d3c129353c53848b0c69932c26a53fd11ba2bdd3cb77",
+    "XRP/USDT": "5c6b3af31a89261051ff78becbc42502e5f99d46eebea4430ffa8a6d3b3cbcb5",
+    "DOGE/USDT": "96c2aa1a9cd6e75cb48e95d4c5e50be18e0172751c06a345318e026aef03a674",
+    "LINK/USDT": "6c4b8ad1018f0a6ab765b10c2cb6732f95c7b2ece1db0f48bc5dbb828bbfb8ea",
+    "AVAX/USDT": "470f4f565963de5e4b03b1dea9ea701be8e90702537cf5bfd5456e35b0ae11dc",
+    "LTC/USDT": "213d5ce7f1f292eccea6313f41c2bc02879f302a6b8aaef9570cf9aaeb9a214b",
+    "DOT/USDT": "22b0326e2466155dacd8b34cfa1785109ec4971d5f409541a2f098e1d0668c84",
+    "TRX/USDT": "b77cc1b293ada144dd364991ec274d7760215977f8df9304117405a4b63b58d9"
+  },
+  "output_checksum": "b7f27d1f91b2bb5e36b44a3869b0fcb70fa3140093ebc744709794f844e18179"
+}

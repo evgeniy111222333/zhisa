@@ -130,6 +130,9 @@ class PrepareConfig:
     embargo_bars: int = 96  # 96 * 15m = 24h
     version: str = CURRENT_VERSION
     seed: int = 0
+    with_cross_asset: bool = False
+    cross_asset_windows: tuple = (64, 256)
+    with_volume_ratios: bool = False
 
     def __post_init__(self) -> None:
         self.tsdb_root = Path(self.tsdb_root)
@@ -487,6 +490,27 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
     }
 
     # 5. Context merge
+    if cfg.with_cross_asset:
+        from zhisa.data.cross_asset import enrich_market_frames_detailed
+        aligned, cross_audit = enrich_market_frames_detailed(
+            aligned, windows=cfg.cross_asset_windows,
+            with_volume_ratios=cfg.with_volume_ratios,
+        )
+        audit_dir = cfg.out_root / "audit" / "cross_asset_index"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_summary = {}
+        for sym, info in cross_audit.items():
+            safe = sym.replace("/", "_")
+            info["index"].to_frame().to_parquet(audit_dir / f"{safe}.parquet")
+            audit_summary[sym] = {k: v for k, v in info.items() if k != "index"}
+        log["stages"]["cross_asset_enrich"] = {
+            "windows": list(cfg.cross_asset_windows),
+            "with_volume_ratios": bool(cfg.with_volume_ratios),
+            "columns_added": [f"rel_logret_1",
+                              *(f"beta_{w}" for w in cfg.cross_asset_windows),
+                              *(f"corr_{w}" for w in cfg.cross_asset_windows)],
+            "per_symbol": audit_summary,
+        }
     with_ctx, ctx_info = _merge_context(aligned, cfg)
     log["stages"]["context_merge"] = ctx_info
 

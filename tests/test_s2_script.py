@@ -25,12 +25,15 @@ from zhisa.scripts.train_s2 import (
     _direction_sample_weights,
     _load_s1_representation,
     _load_macro_prepared_frames,
+    _optim_config_from,
+    _resolve_optim_schedule,
     _sample_spec,
     _sqrt_inverse_weights,
     _target_config_from,
     main,
 )
 from zhisa.training.s1_ssl import load_pretrained_into_policy
+from zhisa.training.optim import OptimConfig, build_optimizer, build_scheduler
 
 
 def _market(n: int, start: str = "2024-01-01") -> pd.DataFrame:
@@ -58,6 +61,51 @@ def _policy_for(df: pd.DataFrame, spec: SampleSpec):
         image_size=spec.image_size,
         n_regime_classes=spec.n_regime_states,
     )
+
+
+def test_s2_auto_cosine_schedule_matches_real_train_steps():
+    optim = _optim_config_from({
+        "optim": {
+            "lr": 5e-5,
+            "scheduler": "cosine",
+            "warmup_steps": 10,
+            "t_max": "auto",
+            "eta_min_ratio": 0.05,
+        }
+    })
+
+    resolved = _resolve_optim_schedule(optim, train_len=1_005, batch_size=128, epochs=4)
+
+    assert resolved.t_max == 28
+    assert resolved.eta_min_ratio == pytest.approx(0.05)
+
+
+def test_cosine_scheduler_floor_prevents_zero_lr_after_tmax():
+    model = torch.nn.Linear(2, 1)
+    optim = build_optimizer(
+        model,
+        OptimConfig(
+            lr=1e-3,
+            scheduler="cosine",
+            warmup_steps=0,
+            t_max=5,
+            eta_min_ratio=0.05,
+        ),
+    )
+    sched = build_scheduler(optim, OptimConfig(
+        lr=1e-3,
+        scheduler="cosine",
+        warmup_steps=0,
+        t_max=5,
+        eta_min_ratio=0.05,
+    ))
+
+    assert sched is not None
+    for _ in range(8):
+        optim.step()
+        sched.step()
+
+    assert min(group["lr"] for group in optim.param_groups) == pytest.approx(5e-5)
 
 
 def test_s1_transfer_keeps_fresh_s2_heads(tmp_path: Path):
@@ -267,6 +315,111 @@ def test_s2_optimizer_uses_discriminative_learning_rates():
     }
     assert encoder_lrs == {2.5e-5}
     assert task_lrs == {1e-4}
+
+
+def test_s2_warm_start_baseline_protects_best_checkpoint(tmp_path: Path, monkeypatch):
+    frame = _market(180)
+    spec = SampleSpec(chart_window=16, feature_window=16, image_size=16, horizons=(4, 8))
+    ds = MarketDataset(frame, spec=spec, cache_charts=False, chart_cache_size=-1)
+    model = _policy_for(frame, spec)
+    from zhisa.training.losses import MultiTaskLoss
+    from zhisa.training.optim import OptimConfig
+    from zhisa.training.s2_supervised import SupervisedTrainer, TrainConfig
+
+    best = tmp_path / "s2_best.pt"
+    trainer = SupervisedTrainer(
+        model,
+        MultiTaskLoss(),
+        TrainConfig(
+            epochs=1,
+            batch_size=32,
+            device="cpu",
+            best_checkpoint=str(best),
+            champion_metric="s2_guarded_score",
+            champion_mode="max",
+            optim=OptimConfig(lr=1e-5, scheduler="none"),
+        ),
+    )
+    metrics = iter([
+        {"total": 1.0, "s2_guarded_score": 0.50},
+        {"total": 0.9, "s2_guarded_score": 0.10},
+    ])
+    monkeypatch.setattr(trainer, "evaluate", lambda _ds: next(metrics))
+
+    trainer.seed_best_from_validation(ds, label="warm_start")
+    trainer.fit(ds, val_ds=ds)
+
+    payload = torch.load(best, map_location="cpu", weights_only=False)
+    assert payload["trainer_state"]["completed_epochs"] == 0
+    assert payload["trainer_state"]["best_val_metric"] == pytest.approx(0.50)
+    assert payload["trainer_state"]["history"][-1]["baseline"] == "warm_start"
+    assert trainer._best_val_metric == pytest.approx(0.50)
+    assert trainer._early_stopping_bad_epochs == 1
+
+
+def test_s2_finetune_regularizers_guard_flat_ratio_and_teacher():
+    import copy
+    from zhisa.training.losses import MultiTaskLoss
+    from zhisa.training.optim import OptimConfig
+    from zhisa.training.s2_supervised import SupervisedTrainer, TrainConfig
+
+    frame = _market(180)
+    spec = SampleSpec(chart_window=16, feature_window=16, image_size=16, horizons=(4, 8))
+    ds = MarketDataset(frame, spec=spec, cache_charts=False, chart_cache_size=-1)
+    batch = multimodal_collate([ds[0], ds[1], ds[2], ds[3]])
+    model = build_default_policy(
+        in_numeric_features=ds._features_df.shape[1],
+        in_context_features=ds._time_features_df.shape[1],
+        window=spec.chart_window,
+        image_size=spec.image_size,
+        n_regime_classes=spec.n_regime_states,
+        market_horizons=spec.horizons,
+    )
+    teacher = copy.deepcopy(model)
+    trainer = SupervisedTrainer(
+        model,
+        MultiTaskLoss(),
+        TrainConfig(
+            device="cpu",
+            optim=OptimConfig(lr=1e-5, scheduler="none"),
+            direction_distill_weight=0.5,
+            direction_multi_distill_weight=0.25,
+            flat_ratio_regularization_weight=10.0,
+            flat_ratio_min=0.8,
+            flat_ratio_max=1.2,
+        ),
+        teacher_model=teacher,
+    )
+    batch_d = trainer._move_batch(batch)
+    model.eval()
+    outputs = model(
+        chart=batch_d["chart"],
+        numeric=batch_d["numeric"],
+        context=batch_d["context"],
+        macro_numeric=batch_d["macro_numeric"],
+    )
+    losses = {"total": torch.zeros(())}
+
+    trainer._add_finetune_regularizers(losses, outputs, batch_d)
+
+    assert "direction_distill" in losses
+    assert "direction_multi_distill" in losses
+    assert losses["direction_distill"].item() == pytest.approx(0.0, abs=1e-6)
+    assert losses["direction_multi_distill"].item() == pytest.approx(0.0, abs=1e-6)
+
+    bad_outputs = {"direction": torch.tensor([[8.0, -8.0, 8.0]] * 4)}
+    bad_losses = {"total": torch.zeros(())}
+    trainer.teacher_model = None
+    trainer.cfg.direction_distill_weight = 0.0
+    trainer.cfg.direction_multi_distill_weight = 0.0
+    trainer._add_finetune_regularizers(
+        bad_losses,
+        bad_outputs,
+        {**batch_d, "label_dir": torch.zeros(4, dtype=torch.long)},
+    )
+
+    assert bad_losses["flat_ratio_regularization"] > 0
+    assert bad_losses["total"] > 0
 
 
 def test_sample_spec_follows_s1_checkpoint_contract():

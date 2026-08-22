@@ -83,7 +83,17 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--with-futures-context", action="store_true", default=True,
-        help="Merge Binance USD-M futures context (funding, OI, LS ratios, taker flow).",
+        help="Merge Binance USD-M futures context (funding/OI/…) when available",
+    )
+    p.add_argument(
+        "--with-cross-asset", action="store_true", default=False,
+        help="Add causal cross-asset/market-breadth columns vs an equal-weight "
+        "index of the OTHER symbols (rel logret, trailing beta/corr).",
+    )
+    p.add_argument(
+        "--with-volume-ratios", action="store_true", default=False,
+        help="Also add causal volume/vol-volatility ratios vs the market index "
+        "(requires --with-cross-asset).",
     )
     p.add_argument(
         "--no-futures-context", dest="with_futures_context",
@@ -179,6 +189,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         test_frac=float(args.test_frac),
         embargo_bars=int(args.embargo_bars),
         version=str(args.version),
+        with_cross_asset=bool(args.with_cross_asset),
+        with_volume_ratios=bool(args.with_volume_ratios),
     )
 
     # Pretty-print the resolved config so a dry-run is informative.

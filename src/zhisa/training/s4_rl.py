@@ -144,6 +144,8 @@ class PPOConfig:
     source_checkpoint: Optional[str] = None
     dataset_root: Optional[str] = None
     dataset_manifest_checksum: Optional[str] = None
+    # Render provenance / byte-equivalence identity (see data.render_contract).
+    render_contract: Optional[dict] = None
     eval_every_iterations: int = 0
     eval_episodes: int = 12
     early_stopping_patience: int = 0
@@ -841,6 +843,7 @@ class PPOTrainer:
                 "policy_head_trained": True,
                 "policy_training": "ppo_reward_optimization",
                 "source_checkpoint": self.cfg.source_checkpoint,
+                "render": self.cfg.render_contract,
                 "dataset": {
                     "root": self.cfg.dataset_root,
                     "manifest_checksum": self.cfg.dataset_manifest_checksum,

@@ -23,6 +23,8 @@ from pathlib import Path
 import torch
 
 from zhisa.config import load_config
+from zhisa.data.render_contract import enforce_parent_render_contract, resolve_render_contract
+from zhisa.rendering.spec import RenderSpec
 from zhisa.data.dataset import MarketDataset, MarketTargetConfig, SampleSpec
 from zhisa.data.preparation import load_prepared_split
 from zhisa.data.expert import SUPPORTED_EXPERTS, build_expert
@@ -112,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--fast-render", action="store_true")
     add_market_data_args(parser)
+    parser.add_argument("--charts-cache-dir", type=str, default=None,
+                        help="Compile charts into a CompiledChartStore and serve from disk")
+    parser.add_argument("--render-workers", type=int, default=0)
+    parser.add_argument("--render-chunk", type=int, default=5000)
     args = parser.parse_args(argv)
 
     cfg_path = Path(args.config)
@@ -168,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
             spec=spec,
             cache_charts=False,
             chart_cache_size=-1,
+            charts_cache_dir=args.charts_cache_dir,
+            render_spec=RenderSpec(size=image_size),
+            render_workers=args.render_workers,
+            render_chunk=args.render_chunk,
             max_bars_per_symbol=args.prepared_max_bars_per_symbol,
             timeframe=str(manifest["timeframe"]),
             compute_targets=True,
@@ -183,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
                 spec=spec,
                 cache_charts=False,
                 chart_cache_size=-1,
+                charts_cache_dir=args.charts_cache_dir,
+                render_spec=RenderSpec(size=image_size),
+                render_workers=args.render_workers,
+                render_chunk=args.render_chunk,
                 max_bars_per_symbol=args.prepared_max_bars_per_symbol,
                 timeframe=str(manifest["timeframe"]),
                 compute_targets=True,
@@ -192,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
             del val_frame
     else:
         probe_ds = MarketDataset(df, spec=spec)
+
+    render_contract = resolve_render_contract(
+        train_datasets if train_datasets is not None else [probe_ds],
+        image_size,
+    )
+    enforce_parent_render_contract(render_contract, s2_payload, stage_label="S2")
 
     # --- Model ---
     n_feat = probe_ds._features.shape[1]
@@ -239,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             source_checkpoint=str(Path(args.s2_checkpoint).resolve()) if args.s2_checkpoint else None,
             dataset_root=str(Path(args.prepared_root).resolve()) if args.prepared_root else None,
             dataset_manifest_checksum=manifest.get("output_checksum") if manifest else None,
+            render_contract=render_contract.to_dict(),
             best_checkpoint=str(Path(args.checkpoint).with_name(f"{Path(args.checkpoint).stem}_best{Path(args.checkpoint).suffix}")) if val_datasets else None,
             early_stopping_patience=int(cfg.get("early_stopping_patience", 0) if cfg else 0),
             early_stopping_min_delta=float(cfg.get("early_stopping_min_delta", 0.0) if cfg else 0.0),

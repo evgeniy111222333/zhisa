@@ -21,7 +21,12 @@ from zhisa.data.dataset import SampleSpec, multimodal_collate
 from zhisa.data.preparation import load_prepared_split
 from zhisa.models.policy import PolicyConfig, PolicyNetwork
 from zhisa.scripts.train_s1 import _market_datasets_from_frame
-from zhisa.scripts.train_s2 import _target_config_from
+from zhisa.scripts.train_s2 import (
+    _load_macro_prepared_frames,
+    _macro_config_from,
+    _macro_prepared_root_from,
+    _target_config_from,
+)
 from zhisa.training.dataloader_factory import build_dataloader
 
 
@@ -29,6 +34,8 @@ def _model_from_checkpoint(payload: dict[str, Any], device: str) -> PolicyNetwor
     raw = dict(payload.get("model_config") or payload.get("config") or {})
     if isinstance(raw.get("vision_channels"), list):
         raw["vision_channels"] = tuple(raw["vision_channels"])
+    if isinstance(raw.get("market_horizons"), list):
+        raw["market_horizons"] = tuple(int(x) for x in raw["market_horizons"])
     allowed = {item.name for item in fields(PolicyConfig)}
     cfg = PolicyConfig(**{k: v for k, v in raw.items() if k in allowed})
     model = PolicyNetwork(cfg).to(device)
@@ -281,6 +288,11 @@ def main() -> int:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--config", default="configs/s2_supervised_15m_12markets.yaml")
     parser.add_argument("--prepared-root", default="data/prepared/s1_15m_12m_v2")
+    parser.add_argument(
+        "--macro-prepared-root",
+        default=None,
+        help="Prepared higher-timeframe dataset root for multi-timeframe S2 checkpoints.",
+    )
     parser.add_argument("--split", default="val")
     parser.add_argument("--out", required=True)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -303,8 +315,22 @@ def main() -> int:
         n_regime_states=model_cfg.n_regime_classes,
     )
     target_cfg, tb_cfg = _target_config_from(cfg)
+    macro_cfg = _macro_config_from(cfg)
     prepared_root = Path(args.prepared_root)
     manifest = json.loads((prepared_root / "manifest.json").read_text(encoding="utf-8"))
+    macro_frames_by_symbol = None
+    macro_root_value = _macro_prepared_root_from(cfg, args.macro_prepared_root)
+    if macro_cfg.enabled and macro_cfg.source == "prepared":
+        if not macro_root_value:
+            raise ValueError(
+                "macro_context.source='prepared' requires --macro-prepared-root "
+                "or macro_context.prepared_root"
+            )
+        macro_frames_by_symbol, _macro_manifest = _load_macro_prepared_frames(
+            Path(macro_root_value),
+            primary_manifest=manifest,
+            expected_timeframe=macro_cfg.resample_rule,
+        )
     frame = load_prepared_split(prepared_root, args.split)
     datasets = _market_datasets_from_frame(
         frame,
@@ -315,6 +341,8 @@ def main() -> int:
         compute_targets=True,
         target_cfg=target_cfg,
         triple_barrier_cfg=tb_cfg,
+        macro_cfg=macro_cfg,
+        macro_frames_by_symbol=macro_frames_by_symbol,
     )
     if args.max_segments > 0:
         datasets = datasets[:args.max_segments]
@@ -344,11 +372,14 @@ def main() -> int:
                     "label_risk": batch.label_risk.to(args.device, non_blocking=True),
                     "label_regime": batch.label_regime.to(args.device, non_blocking=True),
                     "label_ret": batch.label_ret.to(args.device, non_blocking=True),
+                    "macro_numeric": batch.macro_numeric.to(args.device, non_blocking=True)
+                    if batch.macro_numeric is not None else None,
                 }
                 out = model(
                     chart=batch_d["chart"],
                     numeric=batch_d["numeric"],
                     context=batch_d["context"],
+                    macro_numeric=batch_d["macro_numeric"],
                 )
                 local.update(out, batch_d)
             _merge(overall, local)

@@ -1,4 +1,4 @@
-"""Multimodal PyTorch Dataset for trading.
+﻿"""Multimodal PyTorch Dataset for trading.
 
 Each sample at index ``t`` contains:
     - chart image of the last ``chart_window`` bars
@@ -29,7 +29,7 @@ import logging
 import os
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Optional, Protocol, Sequence
 
 import numpy as np
 import pandas as pd
@@ -45,6 +45,8 @@ from zhisa.data.labeling import (
     triple_barrier,
 )
 from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
+from zhisa.features.normalization import NormalizationSpec, PrefixStats, normalize_window
+from zhisa.features.channel_dropout import ChannelDropoutSpec, apply_channel_dropout
 from zhisa.features.time import compute_time_features
 from zhisa.rendering.chart_renderer import render_chart, render_chart_array
 
@@ -89,6 +91,24 @@ class MacroContextConfig:
     source: str = "resample"
 
 
+class ChartSourceLike(Protocol):  # noqa: F811 (see below for re-export)
+    """Anything that can serve pre-compiled chart images by index.
+
+    Implemented by :class:`zhisa.data.chart_store.CompiledChartStore`. The
+    ideal requires this object to be *compute-free* at access time (a memmap
+    read), so the DataLoader is pure I/O + batching.
+    """
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, i: int) -> np.ndarray:
+        """Return the (3, H, W) float32 image for sample ``i``."""
+        ...
+
+    @property
+    def render_meta(self) -> dict: ...
+
+
 @dataclass
 class MultimodalBatch:
     """A batched collection of multimodal samples."""
@@ -108,6 +128,7 @@ class MultimodalBatch:
     label_dir_persistence: torch.Tensor | None = None  # (B,) long, causal t-horizon baseline
     label_dir_multi_persistence: torch.Tensor | None = None  # (B, H) long
     macro_numeric: torch.Tensor | None = None  # (B, M, F) float
+    instrument_id: torch.Tensor | None = None  # (B,) long
 
 
 class MarketDataset(Dataset):
@@ -125,7 +146,7 @@ class MarketDataset(Dataset):
     cache_charts : bool, default ``True``
         When true, all chart images are rendered once in ``__init__`` and
         stored in a single ``(N, 3, H, W)`` float32 array. This trades
-        ~``len(ds) * 3 * H * W * 4`` bytes of RAM (≈ 50-150 MB on a typical
+        ~``len(ds) * 3 * H * W * 4`` bytes of RAM (в‰€ 50-150 MB on a typical
         8k-bar run with H=W=64) for a much faster hot path. The first
         epoch is then as fast as every subsequent one.
     precompute : bool, default ``True``
@@ -163,6 +184,10 @@ class MarketDataset(Dataset):
         compute_targets: bool = True,
         macro_cfg: Optional[MacroContextConfig] = None,
         macro_df: Optional[pd.DataFrame] = None,
+        chart_source: Optional["ChartSourceLike"] = None,
+        normalization: Optional[NormalizationSpec] = None,
+        instrument_id: int = 0,
+        channel_dropout: Optional[ChannelDropoutSpec] = None,
     ) -> None:
         spec = spec or SampleSpec()
         if not isinstance(df.index, pd.DatetimeIndex):
@@ -177,6 +202,20 @@ class MarketDataset(Dataset):
         )
         self._fast_render = os.environ.get("ZHISA_FAST_RENDER", "0") == "1"
         self.spec = spec
+        self.normalization = normalization or NormalizationSpec()
+        self._instrument_id = int(instrument_id)
+        self.channel_dropout = channel_dropout
+        self._aug_salt = 0
+        self._channel_dropout_enabled = channel_dropout is not None
+        # Ideal compute-free path: an external compiled store fully hands the
+        # (3, H, W) charts to the dataset; the dataset never rasterises.
+        self._chart_source = chart_source
+        if chart_source is not None:
+            if len(chart_source) < self._expected_length():
+                raise ValueError(
+                    "chart_source is too short for the requested dataset "
+                    f"(source={len(chart_source)}, need >= {self._expected_length()})"
+                )
         self.tb_cfg = triple_barrier_cfg or TripleBarrierConfig()
         self.target_cfg = target_cfg or MarketTargetConfig()
         if self.target_cfg.direction_mode not in {"forward_return", "triple_barrier"}:
@@ -338,6 +377,7 @@ class MarketDataset(Dataset):
             self._regime_arr = np.ascontiguousarray(
                 self._regime_series.to_numpy(dtype=np.int64)
             )
+            self._prefix_stats = PrefixStats(self._features_arr)
         else:
             # Legacy views: still keep DataFrame references for debug/tests.
             self._features_arr = None
@@ -349,9 +389,10 @@ class MarketDataset(Dataset):
             self._tb_multi_ret_arr = None
             self._vol_arr = None
             self._regime_arr = None
+            self._prefix_stats = None
 
         # ---- Chart cache (preallocated when cache_charts is true) ----
-        if self._cache_charts:
+        if self._cache_charts and self._chart_source is None:
             N = self._length
             H = W = self.spec.image_size
             self._chart_arr = np.empty((N, 3, H, W), dtype=np.float32)
@@ -363,19 +404,31 @@ class MarketDataset(Dataset):
                 self._precompute_charts()
         else:
             self._chart_arr = None
+            if self._cache_charts and self._chart_source is not None:
+                # Compiled store already materialised the charts: nothing to do.
+                logger.info(
+                    "MarketDataset Init: charts supplied by CompiledChartStore "
+                    f"(len={len(self._chart_source)}) вЂ” skipping in-memory render."
+                )
             if self._chart_cache_size > 0:
                 self._chart_cache: "OrderedDict[int, torch.Tensor]" = OrderedDict()
             else:
                 self._chart_cache = {}
 
         # Advertise the fast path to the dataloader factory.
-        self.__fast_getitem__ = bool(self._cache_charts and self._precompute)
+        self.__fast_getitem__ = bool((self._cache_charts and self._precompute) or self._chart_source is not None)
 
         logger.info("MarketDataset Init: All tables processed and ready for DataLoader!")
 
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
+
+    def _expected_length(self) -> int:
+        """Number of samples this dataset would yield (used to size chart sources)."""
+        horizon_max = max(self.spec.horizons) if self.spec.horizons else 0
+        return max(0, len(self.df) - self.spec.chart_window - horizon_max - 1)
+
     def _build_macro_context(self) -> tuple[pd.DataFrame, np.ndarray]:
         """Build closed higher-timeframe features and causal row mapping.
 
@@ -458,8 +511,47 @@ class MarketDataset(Dataset):
         total_time = time.time() - start_time
         logger.info(f"MarketDataset Init: Successfully rendered all {N} charts in {total_time:.1f}s!")
 
+    def _normalize_numeric(self, feature_window, start, end, t) -> np.ndarray:
+        """Dispatch numeric normalization.
+
+        rolling_z (default) uses the O(1) persistent prefix-table when the
+        feature matrix is precomputed; robust_z uses median/MAD. After
+        normalization, keyed channel dropout (if configured and enabled) zeroes
+        whole feature channels deterministically per (salt, sample bucket).
+        """
+        spec = self.normalization
+        if spec.mode == "rolling_z" and self._prefix_stats is not None:
+            lo = max(0, t - int(spec.lookback))
+            num = self._prefix_stats.zscore_window(feature_window, lo, end, eps=float(spec.eps))
+        else:
+            history = self._history_window(t, end)
+            num = normalize_window(feature_window, history, spec)
+        if self.channel_dropout is not None and self._channel_dropout_enabled:
+            bucket = int(t) // max(int(self.channel_dropout.pair_bucket), 1)
+            key = f"cd:{int(self._aug_salt)}:{bucket}"
+            num = apply_channel_dropout(
+                num, self._features_df.columns, key, self.channel_dropout
+            )
+        return num
+
+    def set_aug_salt(self, salt: int) -> None:
+        """Epoch-level salt so masks vary across epochs but stay reproducible."""
+        self._aug_salt = int(salt)
+
+    def set_channel_dropout_enabled(self, enabled: bool) -> None:
+        self._channel_dropout_enabled = bool(enabled)
+
     def _get_chart(self, t: int) -> torch.Tensor:
-        """Return the chart tensor for sample ``t`` (precomputed or cached)."""
+        """Return the chart tensor for sample ``t``.
+
+        Priority:
+        1. compiled external store (compute-free memmap read вЂ” the ideal path),
+        2. precomputed in-memory array,
+        3. lazy render (legacy/debug modes).
+        """
+        if self._chart_source is not None:
+            arr = np.ascontiguousarray(self._chart_source[t], dtype=np.float32).copy()
+            return torch.from_numpy(arr)
         if self._chart_arr is not None:
             return torch.from_numpy(self._chart_arr[t])
         # Lazy / LRU path
@@ -598,9 +690,9 @@ class MarketDataset(Dataset):
         history_window = self._history_window(t, end)
         # Numeric features only (NaN -> 0, robust fill). The cyclic time
         # embeddings are placed in ``context`` (last bar) so the dataset's
-        # ``numeric`` shape matches the env's contract — and the policy's
+        # ``numeric`` shape matches the env's contract вЂ” and the policy's
         # ``in_numeric_features`` default (32) is wire-compatible.
-        num = normalize_feature_window(feature_window, history_window)
+        num = self._normalize_numeric(feature_window, start, end, t)
 
         chart = self._get_chart(t)
         ctx = self._ctx_row(primary_idx)
@@ -617,6 +709,7 @@ class MarketDataset(Dataset):
         lbl_regime = self._label_regime(primary_idx)
 
         mask = np.ones(spec.chart_window, dtype=bool)
+        instrument_id = torch.tensor(self._instrument_id, dtype=torch.long)
         sample = {
             "chart": chart,
             "numeric": torch.from_numpy(num),
@@ -633,6 +726,7 @@ class MarketDataset(Dataset):
             "label_risk": torch.tensor(lbl_risk, dtype=torch.float32),
             "label_regime": torch.tensor(lbl_regime, dtype=torch.long),
             "mask": torch.from_numpy(mask),
+            "instrument_id": instrument_id,
             "meta": {
                 "ts": str(self.df.index[primary_idx]),
                 "t": int(primary_idx),
@@ -646,7 +740,8 @@ class MarketDataset(Dataset):
 
 def multimodal_collate(batch: Sequence[dict]) -> MultimodalBatch:
     """Default collate: stack all tensors, list metas."""
-    keys_tensor = ("chart", "numeric", "context", "label_dir", "label_dir_persistence", "label_ret",
+    keys_tensor = ("chart", "numeric", "context", "instrument_id",
+                   "label_dir", "label_dir_persistence", "label_ret",
                    "label_vol", "label_risk", "label_regime", "mask",
                    "label_dir_multi", "label_dir_multi_persistence", "label_ret_multi")
     out: dict = {}

@@ -63,3 +63,8 @@ secrets.*
 .pytest_full.log.out
 backtest_comparison.csv
 *.tar.gz
+
+# Agent/tool state (personal, not for VCS)
+memory/
+.openclaw/
+.cluster/

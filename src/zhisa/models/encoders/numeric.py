@@ -28,6 +28,13 @@ class NumericEncoderConfig:
     dim_ff: int = 256
     dropout: float = 0.1
     out_dim: int = 128
+    # Numeric-side causality (vision-v2 concept D):
+    # each patch token sees only itself + earlier patches (bars <= its end);
+    # the summary token moves to the END and is the only token allowed to view
+    # the whole window. Patches are blocked from attending the summary (it
+    # contains future-of-patch information).
+    causal: bool = False
+    summary_position: str = "front"  # "front" (default) | "end" (required when causal=True)
 
 
 class _SinPositionalEmbedding(nn.Module):
@@ -53,7 +60,11 @@ class NumericEncoder(nn.Module):
         self.cfg = cfg
         if cfg.window % cfg.patch_size != 0:
             raise ValueError("window must be divisible by patch_size")
+        if cfg.causal and cfg.summary_position != "end":
+            raise ValueError("causal numeric encoder requires summary_position='end'")
         self.n_patches = cfg.window // cfg.patch_size
+        # In causal mode the summary (readout) lives AFTER the patch stream.
+        self.summary_idx = self.n_patches if cfg.causal else 0
         self.patch_proj = nn.Linear(cfg.in_features * cfg.patch_size, cfg.d_model)
         self.pos = _SinPositionalEmbedding(cfg.d_model, max_len=self.n_patches + 1)
         self.cls = nn.Parameter(torch.zeros(1, 1, cfg.d_model))
@@ -81,9 +92,24 @@ class NumericEncoder(nn.Module):
         patches = x.view(B, self.n_patches, self.cfg.patch_size, F_).reshape(B, self.n_patches, -1)
         tokens = self.patch_proj(patches)
         cls = self.cls.expand(B, -1, -1)
-        tokens = torch.cat([cls, tokens], dim=1)
+        if self.cfg.summary_position == "end":
+            tokens = torch.cat([tokens, cls], dim=1)
+        else:
+            tokens = torch.cat([cls, tokens], dim=1)
         tokens = self.pos(tokens)
-        out = self.encoder(tokens)
+
+        mask = None
+        if self.cfg.causal:
+            seq = self.n_patches + 1
+            idx = torch.arange(seq, device=tokens.device)
+            # True = blocked (PyTorch). Row i may attend columns j <= i.
+            m = idx.view(1, -1) > idx.view(-1, 1)
+            m[self.summary_idx, :] = False       # summary (end) attends the whole window
+            m[: self.summary_idx, self.summary_idx] = True   # patches cannot see the summary
+            m[self.summary_idx, self.summary_idx] = False
+            mask = m
+
+        out = self.encoder(tokens, mask=mask)
         out = self.norm(out)
-        cls_out = out[:, 0]
+        cls_out = out[:, self.summary_idx]
         return self.out_proj(cls_out), out

@@ -43,8 +43,18 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
 from zhisa.data.dataset import multimodal_collate
 from zhisa.models.policy import PolicyNetwork
+from zhisa.rendering.augmentations import KeyedAugmentor
 from zhisa.utils.logging import get_logger
 from zhisa.utils.timing import Timer
+
+
+def _iter_leaf_datasets(dataset):
+    """Yield the innermost (MarketDataset-like) datasets of a train/val tree."""
+    if isinstance(dataset, ConcatDataset):
+        for sub in dataset.datasets:
+            yield from _iter_leaf_datasets(sub)
+    else:
+        yield dataset
 
 logger = get_logger(__name__)
 
@@ -83,6 +93,17 @@ class SSLConfig:
     dataset_root: Optional[str] = None
     dataset_timeframe: Optional[str] = None
     dataset_manifest_checksum: Optional[str] = None
+    # Render provenance / byte-equivalence contract (see data.chart_store).
+    renderer_version: Optional[str] = None
+    render_spec_hash: Optional[str] = None
+    render_fingerprint: Optional[str] = None
+    render_store_checksum: Optional[str] = None
+    # Deterministic keyed chart augmentation (see rendering.augmentations).
+    # Empty tuple disables augmentation; keys derive from (epoch, step, index).
+    augment_transforms: tuple = ()
+    augment_strength: float = 0.05
+    augment_crop_frac: float = 0.85
+    augment_noise_std: float = 0.01
     use_ema_teacher: bool = True
     use_masked_modeling: bool = True
     use_temporal_contrast: bool = True
@@ -133,6 +154,7 @@ def temporal_pair_collate(batch) -> dict:
         "chart": current_batch.chart,
         "numeric": current_batch.numeric,
         "context": current_batch.context,
+        "instrument_id": current_batch.instrument_id,
         "future_chart": future_batch.chart,
         "future_numeric": future_batch.numeric,
         "future_context": future_batch.context,
@@ -280,8 +302,12 @@ def masked_numeric_loss(
 
     # Predict original patch values at all positions.
     pred = reconstructor(tokens)  # (B, 1+n_patches, patch*F)
-    # Drop the CLS slot: tokens[:, 0] is CLS, tokens[:, 1:] are patches.
-    pred_patches = pred[:, 1:, :]
+    # Drop the summary slot: in causal mode the summary is the LAST token,
+    # otherwise it is the FIRST (CLS). Patches are everything in between.
+    if getattr(cfg, "causal", False):
+        pred_patches = pred[:, :n_patches, :]
+    else:
+        pred_patches = pred[:, 1:, :]
     target = patches.view(B, n_patches, -1)
     # MSE only on masked positions.
     loss_per_patch = (pred_patches - target).pow(2).mean(dim=-1)  # (B, n_patches)
@@ -369,6 +395,15 @@ class SSLPretrainer:
         self._completed_epochs = 0
         self._history: list[dict] = []
         self._best_val_total = float("inf")
+        # Deterministic keyed chart augmentation (training only).
+        self.augmentor: Optional[KeyedAugmentor] = None
+        if self.cfg.augment_transforms:
+            self.augmentor = KeyedAugmentor(
+                transforms=tuple(self.cfg.augment_transforms),
+                strength=float(self.cfg.augment_strength),
+                crop_frac=float(self.cfg.augment_crop_frac),
+                noise_std=float(self.cfg.augment_noise_std),
+            )
 
     # ------------------------------------------------------------------
     # Single-batch loss
@@ -384,7 +419,9 @@ class SSLPretrainer:
         # --- 1) Temporal contrastive (CPC) --------------------------------
         if self.cfg.use_temporal_contrast:
             assert self.teacher is not None, "temporal contrast requires EMA teacher"
-            z_t = self.model.encode(chart, numeric, context)
+            z_t = self.model.encode(
+                chart, numeric, context, instrument_id=batch.get("instrument_id")
+            )
             future_chart = batch.get("future_chart", chart).to(
                 self.device, non_blocking=True
             )
@@ -396,7 +433,8 @@ class SSLPretrainer:
             )
             with torch.no_grad():
                 z_tp1 = self.teacher.teacher.encode(
-                    future_chart, future_numeric, future_context
+                    future_chart, future_numeric, future_context,
+                    instrument_id=batch.get("instrument_id"),
                 ).detach()
             # Project both sides to the common contrast space.
             p_t = self.temporal_predictor(self.proj_temporal(z_t))
@@ -406,7 +444,7 @@ class SSLPretrainer:
 
         # --- 2) Cross-modal alignment ------------------------------------
         if self.cfg.use_cross_modal:
-            v = self.model.vision(chart)
+            v = self.model.plain_vision(chart)
             n_cls, _ = self.model.numeric(numeric)
             v_proj = self.proj_vision(v)
             n_proj = self.proj_numeric(n_cls)
@@ -430,9 +468,35 @@ class SSLPretrainer:
         losses["total"] = total
         return losses
 
+    def _augment_step_batch(self, batch: dict) -> None:
+        """Deterministically augment ``chart``/``future_chart`` in-place.
+
+        Keys are derived from ``(epoch, global_step, within-batch index, tag)``
+        so a run with the same seed/data reproduces the exact augmented bytes,
+        and every epoch sees a different augmentation per sample. Evaluation is
+        never augmented (see ``evaluate``), keeping the base render identical
+        train-vs-serve.
+        """
+        assert self.augmentor is not None
+        epoch, step = int(self._completed_epochs), int(self._step)
+        chart = batch["chart"]
+        bs = chart.size(0)
+        keys_cur = [f"cur:e{epoch}:s{step}:{i}" for i in range(bs)]
+        batch["chart"] = torch.stack(
+            [self.augmentor.apply(chart[i], k) for i, k in enumerate(keys_cur)], dim=0
+        )
+        if "future_chart" in batch:
+            fut = batch["future_chart"]
+            keys_fut = [f"fut:e{epoch}:s{step}:{i}" for i in range(bs)]
+            batch["future_chart"] = torch.stack(
+                [self.augmentor.apply(fut[i], k) for i, k in enumerate(keys_fut)], dim=0
+            )
+
     def step(self, batch: dict) -> dict:
         """Run one optimisation step on a single batch."""
         self.model.train()
+        if self.augmentor is not None:
+            self._augment_step_batch(batch)
         lr_scale = 1.0
         if self.cfg.warmup_steps > 0:
             lr_scale = min(1.0, float(self._step + 1) / self.cfg.warmup_steps)
@@ -521,6 +585,11 @@ class SSLPretrainer:
         # Sequential adjacent windows are almost identical and become false
         # negatives for one another. A fixed random order measures the same
         # objective without this ordering artefact and remains reproducible.
+        # Channel dropout is a TRAIN-only regulariser: disable it for eval.
+        leaves = list(_iter_leaf_datasets(dataset))
+        for leaf in leaves:
+            if hasattr(leaf, "set_channel_dropout_enabled"):
+                leaf.set_channel_dropout_enabled(False)
         loader = self._loader(dataset, shuffle=True, epoch=10_000)
         self.model.eval()
         if self.teacher is not None:
@@ -540,6 +609,9 @@ class SSLPretrainer:
                 for key, value in losses.items():
                     totals[key] = totals.get(key, 0.0) + float(value.item()) * bs
                 count += bs
+        for leaf in leaves:
+            if hasattr(leaf, "set_channel_dropout_enabled"):
+                leaf.set_channel_dropout_enabled(True)
         if count == 0:
             raise RuntimeError("S1 validation produced no batches")
         return {key: value / count for key, value in totals.items()} | {
@@ -552,6 +624,11 @@ class SSLPretrainer:
         timer = Timer()
         for _ in range(cfg.epochs):
             epoch = self._completed_epochs
+            for leaf in _iter_leaf_datasets(train_ds):
+                if hasattr(leaf, "set_aug_salt"):
+                    leaf.set_aug_salt(epoch)
+                if hasattr(leaf, "set_channel_dropout_enabled"):
+                    leaf.set_channel_dropout_enabled(True)
             loader = self._loader(train_ds, shuffle=True, epoch=epoch)
             self.model.train()
             ep_agg: dict[str, float] = {}
@@ -650,6 +727,18 @@ class SSLPretrainer:
                     "root": self.cfg.dataset_root,
                     "timeframe": self.cfg.dataset_timeframe,
                     "manifest_checksum": self.cfg.dataset_manifest_checksum,
+                },
+                "render": {
+                    "renderer_version": self.cfg.renderer_version,
+                    "render_spec_hash": self.cfg.render_spec_hash,
+                    "render_fingerprint": self.cfg.render_fingerprint,
+                    "render_store_checksum": self.cfg.render_store_checksum,
+                    "augmentation": (
+                        self.augmentor.to_meta() if self.augmentor is not None else None
+                    ),
+                    "augmentation_key_scheme": (
+                        "epoch:step:index:cur|fut" if self.augmentor is not None else None
+                    ),
                 },
             },
             "trainer_state": {

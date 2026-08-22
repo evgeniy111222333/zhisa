@@ -15,6 +15,7 @@ from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
 from zhisa.backtest.reports import print_metrics, save_report
 from zhisa.env.actions import DiscreteAction
 from zhisa.env.trading_env import EnvConfig
+from zhisa.data.render_contract import assert_serving_render
 from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, frame_summary, load_market_dataframe
 from zhisa.scripts.backtest import (
@@ -52,6 +53,7 @@ def _load_policy(checkpoint: str | None, *, device: str = "cpu", seed: int = 0):
         model.load_state_dict(ckpt["model"])
         env_cfg.window = int(cfg.get("window", env_cfg.window))
         env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        assert_serving_render(ckpt, env_cfg.image_size)
         return TorchModelPolicy(model, device=device), env_cfg, "checkpoint", meta
     print("No checkpoint provided; using random policy for no-money smoke replay.")
     return _random_policy(seed), env_cfg, "random", {}

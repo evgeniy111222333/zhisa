@@ -7,7 +7,7 @@ from typing import Iterable, Optional
 import torch
 import torch.nn as nn
 from torch.optim import AdamW, Optimizer
-from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, StepLR
+from torch.optim.lr_scheduler import LambdaLR, StepLR
 
 
 @dataclass
@@ -20,6 +20,7 @@ class OptimConfig:
     step_size: int = 1000
     step_gamma: float = 0.5
     t_max: int = 10_000
+    eta_min_ratio: float = 0.0
 
 
 def build_optimizer(model, cfg: OptimConfig) -> Optimizer:
@@ -58,7 +59,9 @@ def build_scheduler(opt: Optimizer, cfg: OptimConfig) -> Optional[object]:
                 return float(step) / max(1, cfg.warmup_steps)
             progress = (step - cfg.warmup_steps) / max(1, cfg.t_max - cfg.warmup_steps)
             progress = min(max(progress, 0.0), 1.0)
-            return 0.5 * (1.0 + float(torch.cos(torch.tensor(progress * 3.141592653589793))))
+            cosine = 0.5 * (1.0 + float(torch.cos(torch.tensor(progress * 3.141592653589793))))
+            floor = min(max(float(cfg.eta_min_ratio), 0.0), 1.0)
+            return floor + (1.0 - floor) * cosine
         return LambdaLR(opt, lr_lambda=lr_lambda)
     if cfg.scheduler == "step":
         return StepLR(opt, step_size=cfg.step_size, gamma=cfg.step_gamma)

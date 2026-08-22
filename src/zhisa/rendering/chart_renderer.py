@@ -1,9 +1,20 @@
-"""Chart image renderer: OHLCV DataFrame window -> RGB tensor.
+"""Chart image renderer: OHLCV window -> RGB tensor.
 
-The renderer is deliberately lightweight — it draws a candlestick chart
-with a small set of overlays and returns a ``torch.Tensor`` of shape
-``(3, H, W)`` in [0, 1]. It is used both as a model input channel and
-as a debugging / interpretability tool.
+**Canonical renderer (single source of truth).**
+
+The ideal architecture treats charting as a compiled, deterministic artefact:
+
+- One renderer implementation, driven by a :class:`RenderSpec` (``spec.py``).
+- **No runtime environment-flag divergence**: ``render_chart`` and
+  ``render_chart_array`` always produce the *same* canonical pixels, whether
+  or not ``ZHISA_FAST_RENDER`` is set. The old matplotlib-vs-numpy split is
+  retired for the training path; the matplotlib path remains available only
+  as an explicit *visualisation* tool (``render_chart_visualization``).
+- Anti-aliasing is provided by **supersampling + box downsample** so candles
+  and overlay lines have smooth, deterministic edges.
+
+Produced images are ``torch.FloatTensor`` of shape ``(3, H, W)`` in [0, 1],
+bit-reproducible given the same ``(ohlcv window, RenderSpec)``.
 """
 from __future__ import annotations
 
@@ -15,6 +26,16 @@ import numpy as np
 import pandas as pd
 import torch
 
+from zhisa.rendering.spec import (
+    DEFAULT_BG,
+    DEFAULT_FG,
+    DEFAULT_GREEN,
+    DEFAULT_GREY,
+    DEFAULT_RED,
+    RenderSpec,
+    default_render_spec,
+)
+
 try:
     import matplotlib
     matplotlib.use("Agg")
@@ -25,11 +46,162 @@ except Exception:  # pragma: no cover
     _HAS_MPL = False
 
 
-_DEFAULT_BG = (0.05, 0.06, 0.09)
-_DEFAULT_FG = (0.85, 0.88, 0.92)
-_GREEN = (0.20, 0.80, 0.40)
-_RED = (0.95, 0.35, 0.30)
-_GREY = (0.45, 0.48, 0.55)
+# Bump whenever rasterisation semantics change (geometry, AA, mapping). It
+# participates in every byte-equivalence / golden contract so a deliberate
+# visual change cannot be masked by a stale cache.
+CANONICAL_RENDERER_VERSION = "1.0.0"
+
+
+def render_fingerprint(spec: RenderSpec) -> str:
+    """Content-address of a render = spec hash + renderer version.
+
+    Two artefacts with the same fingerprint are guaranteed to be visually
+    identical *by construction* (given the same input window). Used by the
+    compiled chart store and the golden-image registry.
+    """
+    import hashlib
+    raw = f"{CANONICAL_RENDERER_VERSION}:{spec.content_hash()}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Canonical rasteriser (pure numpy, deterministic, anti-aliased)
+# ---------------------------------------------------------------------------
+
+
+def _running_mean(values: np.ndarray, period: int) -> np.ndarray:
+    """Trailing mean with ``min_periods=1`` (prefix-expanding head)."""
+    n = len(values)
+    if n < period:
+        return np.cumsum(values) / np.arange(1, n + 1)
+    kernel = np.ones(period) / period
+    sma = np.convolve(values, kernel, mode="valid")
+    pad = np.cumsum(values[: period - 1]) / np.arange(1, period)
+    return np.concatenate((pad, sma))
+
+
+def _render_ohlcv_canonical(ohlcv: np.ndarray, spec: RenderSpec) -> np.ndarray:
+    """Render ``(N, >=5)`` OHLCV into a ``(size, size, 3)`` float32 image.
+
+    Pure function: deterministic for a fixed ``(ohlcv, spec)``.
+    """
+    values = np.asarray(ohlcv, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 5:
+        raise ValueError("ohlcv must have shape (N, >=5)")
+    n = len(values)
+    if n < 2:
+        raise ValueError("ohlcv must contain at least 2 rows to render a chart")
+    size, ss = spec.size, max(int(spec.supersample), 1)
+    S = size * ss
+    price_h = int(S * spec.price_frac)
+
+    rgb = np.full((S, S, 3), spec.background, dtype=np.float32)
+
+    o_arr, h_arr, l_arr, c_arr, v_arr = values[:, :5].T
+    lo = float(l_arr.min())
+    hi = float(h_arr.max())
+    rng = max(hi - lo, float(spec.min_range))
+
+    xs = (np.arange(n) * (S - 1) / max(n - 1, 1)).astype(int)
+
+    def price_y(values_: np.ndarray) -> np.ndarray:
+        y = price_h - ((values_ - lo) / rng * (price_h - 2)).astype(int)
+        return np.clip(y, 0, price_h - 1)
+
+    y_o, y_c = price_y(o_arr), price_y(c_arr)
+    y_h, y_l = price_y(h_arr), price_y(l_arr)
+    colors = np.where(
+        (c_arr >= o_arr)[:, None],
+        np.asarray(spec.green, dtype=np.float32),
+        np.asarray(spec.red, dtype=np.float32),
+    )
+
+    # Candles: any row inside [min(wick), max(wick)] is lit, then the body is
+    # painted over with the same colour (matches the historical look).
+    y_grid = np.arange(price_h)[:, None]
+    wick = (y_grid >= np.minimum(y_h, y_l)) & (y_grid <= np.maximum(y_h, y_l))
+    body = (y_grid >= np.minimum(y_o, y_c)) & (y_grid <= np.maximum(y_o, y_c))
+    py, bars = np.nonzero(wick | body)
+    rgb[py, xs[bars]] = colors[bars]
+
+    # Volume mini-panel at the bottom.
+    if spec.include_volume:
+        vmax = max(float(v_arr.max()), 1e-9)
+        bar_heights = (v_arr / vmax * (S - price_h - 1)).astype(int)
+        volume_y = np.arange(price_h, S)[:, None]
+        volume_mask = volume_y >= (S - bar_heights)[None, :]
+        vy, bars = np.nonzero(volume_mask)
+        # vy is relative to price_h; offset back into absolute rows so the
+        # volume fills the BOTTOM panel (the historical fast renderer's
+        # semantics), never the top of the price area.
+        rgb[vy + price_h, xs[bars]] = colors[bars]
+
+    # Overlay SMA lines, drawn deterministically in period order.
+    if spec.include_overlays:
+        for period, col in sorted(spec.overlays, key=lambda ov: int(ov[0])):
+            if n < int(period):
+                continue
+            sma = _running_mean(c_arr, int(period))
+            ys = price_y(sma)
+            x_grid = np.arange(S)
+            line_y = np.rint(np.interp(x_grid, xs, ys)).astype(int)
+            rgb[np.clip(line_y, 0, price_h - 1), x_grid] = np.asarray(col, dtype=np.float32)
+
+    # Anti-aliasing: box downsample from (S, S) -> (size, size).
+    if ss > 1:
+        aligned = rgb.reshape(size, ss, size, ss, 3)
+        rgb = aligned.mean(axis=(1, 3)).astype(np.float32)
+
+    return rgb
+
+
+def render_ohlcv(ohlcv: np.ndarray, spec: Optional[RenderSpec] = None) -> torch.Tensor:
+    """Render ``(N, >=5)`` OHLCV to a ``(3, size, size)`` tensor (canonical)."""
+    spec = spec or RenderSpec()
+    rgb = _render_ohlcv_canonical(ohlcv, spec)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float()
+
+
+# ---------------------------------------------------------------------------
+# Public entry points (single canonical path)
+# ---------------------------------------------------------------------------
+
+
+def render_chart(df: pd.DataFrame, size: int = 64, spec: Optional[RenderSpec] = None) -> torch.Tensor:
+    """Render a candlestick + volume chart from an OHLCV window.
+
+    Always uses the canonical renderer regardless of ``ZHISA_FAST_RENDER``.
+    Returns a ``torch.FloatTensor`` of shape ``(3, size, size)`` in [0, 1].
+    """
+    if df is None or len(df) == 0:
+        return torch.full((3, size, size), 0.5, dtype=torch.float32)
+    spec = spec or RenderSpec(size=size)
+    values = df[["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=np.float64, copy=False
+    )
+    rgb = _render_ohlcv_canonical(values, spec)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float()
+
+
+def render_chart_array(ohlcv: np.ndarray, size: int = 64, spec: Optional[RenderSpec] = None) -> torch.Tensor:
+    """Render a contiguous ``(N, 5)`` OHLCV array without pandas overhead."""
+    spec = spec or RenderSpec(size=size)
+    rgb = _render_ohlcv_canonical(ohlcv, spec)
+    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float()
+
+
+def render_chart_batch(
+    windows: list[pd.DataFrame],
+    size: int = 64,
+    spec: Optional[RenderSpec] = None,
+) -> torch.Tensor:
+    """Batched wrapper around :func:`render_chart`."""
+    return torch.stack([render_chart(w, size=size, spec=spec) for w in windows], dim=0)
+
+
+# ---------------------------------------------------------------------------
+# Visualization-only matplotlib path (explicit; never used by training)
+# ---------------------------------------------------------------------------
 
 
 def _draw_candles(ax, df: pd.DataFrame) -> None:
@@ -43,9 +215,7 @@ def _draw_candles(ax, df: pd.DataFrame) -> None:
     width = 0.6
     for i in range(len(df)):
         color = _GREEN if c[i] >= o[i] else _RED
-        # Wick
         ax.plot([i, i], [l[i], h[i]], color=color, linewidth=0.7, solid_capstyle="butt")
-        # Body
         body_low = min(o[i], c[i])
         body_height = max(abs(o[i] - c[i]), 1e-9 * (h[i] - l[i] + 1e-12))
         rect = Rectangle((i - width / 2, body_low), width, body_height,
@@ -75,20 +245,19 @@ def _draw_volume(ax, df: pd.DataFrame) -> None:
 
 
 def _df_to_image(df: pd.DataFrame, size: int) -> np.ndarray:
+    """Matplotlib-backed raster (visualization only, not deterministic SOT)."""
     if not _HAS_MPL:
-        # Last-resort: a tiny placeholder image (so the rest of the pipeline
-        # can still be exercised in environments without matplotlib).
         return np.full((size, size, 3), 0.5, dtype=np.float32)
     fig = plt.figure(figsize=(size / 100, size / 100), dpi=100)
     gs = fig.add_gridspec(4, 1, hspace=0.0)
     ax_price = fig.add_subplot(gs[0:3, 0])
     ax_vol = fig.add_subplot(gs[3, 0], sharex=ax_price)
     for ax in (ax_price, ax_vol):
-        ax.set_facecolor(_DEFAULT_BG)
+        ax.set_facecolor(DEFAULT_BG)
         for spine in ax.spines.values():
-            spine.set_color(_GREY)
-        ax.tick_params(colors=_DEFAULT_FG, labelsize=4, length=0)
-    fig.patch.set_facecolor(_DEFAULT_BG)
+            spine.set_color(DEFAULT_GREY)
+        ax.tick_params(colors=DEFAULT_FG, labelsize=4, length=0)
+    fig.patch.set_facecolor(DEFAULT_BG)
 
     _draw_candles(ax_price, df)
     _draw_overlay(ax_price, df, "SMA", 10, "#3aa0ff")
@@ -105,7 +274,6 @@ def _df_to_image(df: pd.DataFrame, size: int) -> np.ndarray:
         arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
         rgb = arr[:, :, 1:4]  # ARGB -> RGB
     except Exception:
-        # Fallback via savefig to a buffer (works on more backends)
         bio = BytesIO()
         fig.savefig(bio, format="png", facecolor=fig.get_facecolor())
         bio.seek(0)
@@ -115,23 +283,16 @@ def _df_to_image(df: pd.DataFrame, size: int) -> np.ndarray:
     return rgb.astype(np.float32) / 255.0
 
 
-def render_chart(df: pd.DataFrame, size: int = 64) -> torch.Tensor:
-    """Render a small candlestick + volume chart from an OHLCV window.
+def render_chart_visualization(df: pd.DataFrame, size: int = 64) -> np.ndarray:
+    """Explicitly ask for the matplotlib visualisation raster.
 
-    Returns a ``torch.FloatTensor`` of shape ``(3, H, W)`` in [0, 1].
-    Falls back to a uniform grey image if matplotlib is unavailable.
-
-    Set the environment variable ``ZHISA_FAST_RENDER=1`` to use the
-    pure-numpy renderer (much faster, used by default in tests).
+    This is for humans (debugging / interpretability) only. It is **not**
+    a training input source, so its non-determinism is acceptable and it is
+    intentionally separate from the canonical renderer used in the pipeline.
     """
     if df is None or len(df) == 0:
-        return torch.full((3, size, size), 0.5, dtype=torch.float32)
-    use_fast = os.environ.get("ZHISA_FAST_RENDER", "0") == "1"
-    if use_fast:
-        rgb = _fast_render(df, size)
-    else:
-        rgb = _df_to_image(df, size)
-    # Resize to (size, size) if needed (defensive)
+        return np.full((size, size, 3), 0.5, dtype=np.float32)
+    rgb = _df_to_image(df, size)
     if rgb.shape[0] != size or rgb.shape[1] != size:
         try:
             from PIL import Image
@@ -139,80 +300,34 @@ def render_chart(df: pd.DataFrame, size: int = 64) -> torch.Tensor:
             rgb = np.asarray(img).astype(np.float32) / 255.0
         except Exception:
             rgb = np.full((size, size, 3), 0.5, dtype=np.float32)
-    t = torch.from_numpy(rgb).permute(2, 0, 1).contiguous()
-    return t.float()
+    return rgb
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (deprecated; kept until all callers migrate)
+# ---------------------------------------------------------------------------
+
+# Historical pure-numpy renderer without anti-aliasing. Kept for auditability
+# and for tests that compare the legacy raster against the canonical one. The
+# canonical renderer is always the production path.
+def _fast_render_ohlcv(ohlcv: np.ndarray, size: int) -> np.ndarray:
+    if len(ohlcv) < 2:
+        return np.full((size, size, 3), 0.5, dtype=np.float32)
+    spec = RenderSpec(size=size, supersample=1)
+    return _render_ohlcv_canonical(ohlcv, spec)
 
 
 def _fast_render(df: pd.DataFrame, size: int) -> np.ndarray:
-    """A pure-numpy candlestick renderer; an order of magnitude faster
-    than matplotlib and good enough for feature extraction."""
     values = df[["open", "high", "low", "close", "volume"]].to_numpy(
         dtype=np.float64, copy=False
     )
     return _fast_render_ohlcv(values, size)
 
 
-def render_chart_array(ohlcv: np.ndarray, size: int = 64) -> torch.Tensor:
-    """Render a contiguous ``(N, 5)`` OHLCV array without pandas overhead."""
-    rgb = _fast_render_ohlcv(ohlcv, size)
-    return torch.from_numpy(rgb).permute(2, 0, 1).contiguous().float()
-
-
-def _fast_render_ohlcv(ohlcv: np.ndarray, size: int) -> np.ndarray:
-    if len(ohlcv) < 2:
-        return np.full((size, size, 3), 0.5, dtype=np.float32)
-    values = np.asarray(ohlcv, dtype=np.float64)
-    if values.ndim != 2 or values.shape[1] < 5:
-        raise ValueError("ohlcv must have shape (N, >=5)")
-    n = len(values)
-    rgb = np.full((size, size, 3), 0.05, dtype=np.float32)
-    o_arr, h_arr, l_arr, c_arr, v_arr = values[:, :5].T
-
-    lo = float(l_arr.min())
-    hi = float(h_arr.max())
-    rng = max(hi - lo, 1e-9)
-    xs = (np.arange(n) * (size - 1) / max(n - 1, 1)).astype(int)
-    price_h = int(size * 0.75)
-
-    def price_y(values_: np.ndarray) -> np.ndarray:
-        y = price_h - ((values_ - lo) / rng * (price_h - 2)).astype(int)
-        return np.clip(y, 0, price_h - 1)
-
-    y_o, y_c = price_y(o_arr), price_y(c_arr)
-    y_h, y_l = price_y(h_arr), price_y(l_arr)
-    colors = np.where(
-        (c_arr >= o_arr)[:, None],
-        np.asarray(_GREEN, dtype=np.float32),
-        np.asarray(_RED, dtype=np.float32),
-    )
-    y_grid = np.arange(price_h)[:, None]
-    wick = (y_grid >= np.minimum(y_h, y_l)) & (y_grid <= np.maximum(y_h, y_l))
-    body = (y_grid >= np.minimum(y_o, y_c)) & (y_grid <= np.maximum(y_o, y_c))
-    py, bars = np.nonzero(wick | body)
-    rgb[py, xs[bars]] = colors[bars]
-
-    vmax = max(v_arr.max(), 1e-9)
-    bar_heights = (v_arr / vmax * (size - price_h - 1)).astype(int)
-    volume_y = np.arange(price_h, size)[:, None]
-    volume_mask = volume_y >= (size - bar_heights)[None, :]
-    vy, bars = np.nonzero(volume_mask)
-    rgb[vy + price_h, xs[bars]] = colors[bars]
-
-    for p, col in ((10, np.array([0.23, 0.63, 1.0], dtype=np.float32)),
-                   (30, np.array([1.0, 0.67, 0.20], dtype=np.float32))):
-        if n < p:
-            continue
-        kernel = np.ones(p) / p
-        sma = np.convolve(c_arr, kernel, mode='valid')
-        pad_len = n - len(sma)
-        if pad_len > 0:
-            pad = np.cumsum(c_arr[:pad_len]) / np.arange(1, pad_len + 1)
-            sma = np.concatenate((pad, sma))
-        ys = price_y(sma)
-        x_grid = np.arange(size)
-        line_y = np.rint(np.interp(x_grid, xs, ys)).astype(int)
-        rgb[np.clip(line_y, 0, price_h - 1), x_grid] = col
-    return rgb
+# Deprecated matplotlib-drawing helpers, kept for external imports.
+_GREEN = DEFAULT_GREEN
+_RED = DEFAULT_RED
+_GREY = DEFAULT_GREY
 
 
 def _draw_line(img: np.ndarray, x0: int, y0: int, x1: int, y1: int, color: np.ndarray) -> None:
@@ -236,11 +351,3 @@ def _draw_line(img: np.ndarray, x0: int, y0: int, x1: int, y1: int, color: np.nd
         if e2 <= dx:
             err += dx
             y += sy
-
-
-def render_chart_batch(
-    windows: list[pd.DataFrame],
-    size: int = 64,
-) -> torch.Tensor:
-    """Batched wrapper around :func:`render_chart`."""
-    return torch.stack([render_chart(w, size=size) for w in windows], dim=0)

@@ -14,6 +14,7 @@ from zhisa.backtest.reports import print_metrics, save_report
 from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
 from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
+from zhisa.data.render_contract import assert_serving_render
 from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.utils.seeding import set_seed
@@ -110,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         policy = TorchModelPolicy(model)
         env_cfg.window = int(cfg.get("window", env_cfg.window))
         env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        assert_serving_render(ckpt, env_cfg.image_size)
     else:
         policy = _random_policy(args.seed)
         print("No checkpoint provided; using random policy for smoke test.")

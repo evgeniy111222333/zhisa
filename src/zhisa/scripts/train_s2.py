@@ -16,7 +16,25 @@ from zhisa.config import load_config
 from zhisa.data.dataset import MacroContextConfig, MarketDataset, MarketTargetConfig, SampleSpec
 from zhisa.data.labeling import TripleBarrierConfig
 from zhisa.data.preparation import load_prepared_split, load_prepared_symbol
+from zhisa.data.render_contract import (
+    RenderContract,
+    RenderContractError,
+    assert_contract_identity,
+    default_spec_contract,
+    enforce_parent_render_contract,
+    resolve_render_contract,
+)
+
+# Back-compat aliases for callers/tests that used the local implementations.
+def _resolve_render_contract(datasets, image_size):
+    return resolve_render_contract(datasets, image_size)
+
+
+def _enforce_parent_render_contract(contract, parent_payload, *, stage_label):
+    enforce_parent_render_contract(contract, parent_payload, stage_label=stage_label)
+from zhisa.features.normalization import NormalizationSpec
 from zhisa.models.policy import PolicyConfig, PolicyNetwork, build_default_policy
+from zhisa.rendering.spec import RenderSpec
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
 from zhisa.scripts.train_s1 import _concat, _market_datasets_from_frame
 from zhisa.training.losses import LossWeights, MultiTaskLoss
@@ -45,6 +63,11 @@ def _default_device() -> str:
 
 def _optim_config_from(cfg) -> OptimConfig:
     raw = (cfg.get("optim", {}) or {}) if cfg else {}
+    t_max_raw = raw.get("t_max", 10_000)
+    if isinstance(t_max_raw, str):
+        t_max = 0 if t_max_raw.strip().lower() == "auto" else int(t_max_raw)
+    else:
+        t_max = int(t_max_raw)
     return OptimConfig(
         lr=float(raw.get("lr", 3e-4)),
         weight_decay=float(raw.get("weight_decay", 1e-4)),
@@ -53,8 +76,37 @@ def _optim_config_from(cfg) -> OptimConfig:
         warmup_steps=int(raw.get("warmup_steps", 200)),
         step_size=int(raw.get("step_size", 1000)),
         step_gamma=float(raw.get("step_gamma", 0.5)),
-        t_max=int(raw.get("t_max", 10_000)),
+        t_max=t_max,
+        eta_min_ratio=float(raw.get("eta_min_ratio", raw.get("min_lr_ratio", 0.0))),
     )
+
+
+def _resolve_optim_schedule(cfg: OptimConfig, *, train_len: int, batch_size: int, epochs: int) -> OptimConfig:
+    """Resolve data-dependent optimizer schedule fields.
+
+    S2 uses drop_last=True in its train loader, so one epoch is the floor
+    number of full batches. ``t_max: auto`` means decay across the real run
+    instead of guessing a fixed step count in YAML.
+    """
+    if cfg.scheduler != "cosine":
+        return cfg
+    steps_per_epoch = max(1, int(train_len) // max(1, int(batch_size)))
+    total_steps = max(1, steps_per_epoch * max(1, int(epochs)))
+    if int(cfg.t_max) <= 0:
+        cfg.t_max = total_steps
+        print(
+            "Resolved cosine scheduler: "
+            f"t_max=auto -> {cfg.t_max} steps "
+            f"({steps_per_epoch} steps/epoch * {epochs} epochs), "
+            f"eta_min_ratio={cfg.eta_min_ratio:g}"
+        )
+    elif int(cfg.t_max) < total_steps:
+        print(
+            "WARNING: cosine scheduler t_max is shorter than planned training: "
+            f"t_max={cfg.t_max}, planned_steps={total_steps}. "
+            "LR will sit at eta_min_ratio after t_max."
+        )
+    return cfg
 
 
 def _loss_weights_from(cfg) -> LossWeights:
@@ -454,6 +506,10 @@ def _class_weights(
     )
 
 
+
+
+
+
 def _target_contract_dict(
     target_cfg: MarketTargetConfig,
     tb_cfg: TripleBarrierConfig,
@@ -507,6 +563,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--cache-charts", action="store_true")
     parser.add_argument("--chart-cache-size", type=int, default=-1)
+    parser.add_argument(
+        "--charts-cache-dir",
+        type=str,
+        default=None,
+        help="Compile charts into a content-addressed CompiledChartStore (memmap) "
+        "and serve the trainer from disk. Enables the render-contract byte-equivalence "
+        "guarantee vs the S1/warm-start checkpoint.",
+    )
+    parser.add_argument("--render-workers", type=int, default=0,
+                        help="Parallel chart-compile workers (0 = serial)")
+    parser.add_argument("--render-chunk", type=int, default=5_000,
+                        help="Rows per worker task during chart materialisation")
+    parser.add_argument("--normalize-mode", type=str, default=None,
+                        choices=["rolling_z", "robust_z"],
+                        help="Feature normalization mode (default: rolling_z)")
+    parser.add_argument("--normalize-lookback", type=int, default=None)
+    parser.add_argument("--render-engine", type=str, default="cpu",
+                        choices=["cpu", "gpu"],
+                        help="Chart compile engine (gpu requires CUDA; parity-gated)")
     add_market_data_args(parser)
     args = parser.parse_args(argv)
 
@@ -514,6 +589,14 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config(cfg_path) if cfg_path.exists() else None
     seed = int(cfg.get("seed", 0)) if cfg else 0
     set_seed(seed)
+    def _norm_spec_from(args, cfg):
+        _nm = (cfg.get("normalize", {}) or {}) if cfg else {}
+        return NormalizationSpec(
+            mode=str(args.normalize_mode or _nm.get("mode", "rolling_z")),
+            lookback=int(args.normalize_lookback or _nm.get("lookback", 256)),
+        )
+
+    norm_spec = _norm_spec_from(args, cfg)
     if args.fast_render:
         os.environ["ZHISA_FAST_RENDER"] = "1"
 
@@ -573,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         train_frame = load_prepared_split(prepared_root, args.train_split)
         train_rows = len(train_frame)
+        train_symbols = sorted(train_frame["symbol"].unique())
         train_datasets = _market_datasets_from_frame(
             train_frame,
             spec=spec,
@@ -585,6 +669,13 @@ def main(argv: list[str] | None = None) -> int:
             triple_barrier_cfg=tb_cfg,
             macro_cfg=macro_cfg,
             macro_frames_by_symbol=macro_frames_by_symbol,
+            charts_cache_dir=args.charts_cache_dir,
+            render_spec=RenderSpec(size=spec.image_size),
+            render_workers=args.render_workers,
+            render_chunk=args.render_chunk,
+            render_engine=args.render_engine,
+            instruments=train_symbols,
+            normalization=norm_spec,
         )
         del train_frame
         if not args.no_validation:
@@ -601,6 +692,13 @@ def main(argv: list[str] | None = None) -> int:
                 triple_barrier_cfg=tb_cfg,
                 macro_cfg=macro_cfg,
                 macro_frames_by_symbol=macro_frames_by_symbol,
+                charts_cache_dir=args.charts_cache_dir,
+                render_spec=RenderSpec(size=spec.image_size),
+                render_workers=args.render_workers,
+                render_chunk=args.render_chunk,
+                render_engine=args.render_engine,
+                instruments=train_symbols,
+                normalization=norm_spec,
             )
             del val_frame
             val_ds = _concat(val_datasets)
@@ -623,7 +721,19 @@ def main(argv: list[str] | None = None) -> int:
         train_datasets = [only_ds]
         train_ds = only_ds
 
+    _nm = (cfg.get("normalize", {}) or {}) if cfg else {}
+    norm_spec = NormalizationSpec(
+        mode=str(args.normalize_mode or _nm.get("mode", "rolling_z")),
+        lookback=int(args.normalize_lookback or _nm.get("lookback", 256)),
+    )
+
     first_ds = train_datasets[0]
+    render_contract = _resolve_render_contract(train_datasets, spec.image_size)
+    parent = warm_start_payload if warm_start_payload is not None else s1_payload
+    _enforce_parent_render_contract(
+        render_contract, parent,
+        stage_label="warm-start" if warm_start_payload is not None else "S1",
+    )
     model = _build_policy(first_ds, spec, warm_start_payload or s1_payload, cfg)
     if warm_start_payload is not None:
         missing, unexpected = model.load_state_dict(warm_start_payload["model"], strict=False)
@@ -715,6 +825,12 @@ def main(argv: list[str] | None = None) -> int:
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
     workers = args.workers if args.workers is not None else int(cfg.get("workers", 0) if cfg else 0)
+    optim_cfg = _resolve_optim_schedule(
+        _optim_config_from(cfg),
+        train_len=len(train_ds),
+        batch_size=batch_size,
+        epochs=epochs,
+    )
     best_checkpoint = args.best_checkpoint
     if val_ds is not None and not best_checkpoint:
         checkpoint = Path(args.checkpoint)
@@ -742,6 +858,7 @@ def main(argv: list[str] | None = None) -> int:
         dataset_root=str(Path(args.prepared_root).resolve()) if args.prepared_root else None,
         dataset_timeframe=str(manifest["timeframe"]) if manifest else None,
         dataset_manifest_checksum=str(manifest["output_checksum"]) if manifest else None,
+        render_contract=render_contract.to_dict(),
         target_config={
             **_target_contract_dict(target_cfg, tb_cfg),
             "horizons": [int(x) for x in spec.horizons],
@@ -771,9 +888,49 @@ def main(argv: list[str] | None = None) -> int:
         guard_min_flat_pred_target_ratio=float(cfg.get("guard_min_flat_pred_target_ratio", 0.0) if cfg else 0.0),
         guard_max_flat_pred_target_ratio=float(cfg.get("guard_max_flat_pred_target_ratio", 10.0) if cfg else 10.0),
         guard_penalty_scale=float(cfg.get("guard_penalty_scale", 0.0) if cfg else 0.0),
-        optim=_optim_config_from(cfg),
+        direction_distill_weight=float(cfg.get("direction_distill_weight", 0.0) if cfg else 0.0),
+        direction_multi_distill_weight=float(cfg.get("direction_multi_distill_weight", 0.0) if cfg else 0.0),
+        direction_distill_temperature=float(cfg.get("direction_distill_temperature", 2.0) if cfg else 2.0),
+        flat_ratio_regularization_weight=float(cfg.get("flat_ratio_regularization_weight", 0.0) if cfg else 0.0),
+        flat_ratio_min=float(cfg.get("flat_ratio_min", 0.0) if cfg else 0.0),
+        flat_ratio_max=float(cfg.get("flat_ratio_max", 10.0) if cfg else 10.0),
+        optim=optim_cfg,
     )
-    trainer = SupervisedTrainer(model, loss, train_cfg, train_sample_weights=train_sample_weights)
+    teacher_model = None
+    if warm_start_payload is not None and (
+        train_cfg.direction_distill_weight > 0.0
+        or train_cfg.direction_multi_distill_weight > 0.0
+    ):
+        teacher_model = _build_policy(first_ds, spec, warm_start_payload, cfg)
+        teacher_model.load_state_dict(warm_start_payload["model"], strict=True)
+        print(
+            "Loaded warm-start teacher for direction distillation: "
+            f"direction={train_cfg.direction_distill_weight:g} "
+            f"direction_multi={train_cfg.direction_multi_distill_weight:g} "
+            f"temperature={train_cfg.direction_distill_temperature:g}"
+        )
+    trainer = SupervisedTrainer(
+        model,
+        loss,
+        train_cfg,
+        train_sample_weights=train_sample_weights,
+        teacher_model=teacher_model,
+    )
+    if bool(cfg.get("warm_start_best_baseline", False) if cfg else False):
+        if warm_start_payload is None:
+            raise ValueError("warm_start_best_baseline=true requires --warm-start-checkpoint")
+        if val_ds is None:
+            raise ValueError("warm_start_best_baseline=true requires validation data")
+        baseline_metrics = trainer.seed_best_from_validation(
+            val_ds,
+            label="warm_start",
+            save_checkpoint=bool(best_checkpoint),
+        )
+        print(
+            "Seeded warm-start champion baseline: "
+            f"{train_cfg.champion_metric}="
+            f"{baseline_metrics.get(train_cfg.champion_metric, baseline_metrics.get('total')):.6f}"
+        )
     if args.resume_from:
         if not Path(args.resume_from).is_file():
             raise FileNotFoundError(f"S2 resume checkpoint not found: {args.resume_from}")

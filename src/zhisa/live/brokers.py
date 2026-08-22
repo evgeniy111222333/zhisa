@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -224,6 +225,7 @@ class OKXDemoBroker:
         ).digest()
         return {
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "OK-ACCESS-KEY": self.cfg.api_key,
             "OK-ACCESS-SIGN": base64.b64encode(digest).decode("ascii"),
             "OK-ACCESS-TIMESTAMP": timestamp,
@@ -238,13 +240,18 @@ class OKXDemoBroker:
             return row
 
         request_path = "/api/v5/trade/order"
+        td_mode = self.cfg.td_mode
+        # If symbol is spot (no -SWAP or -FUTURES suffix) and mode is cross/auto, use cash
+        if not intent.symbol.endswith("-SWAP") and not intent.symbol.endswith("-FUTURES") and td_mode in ("cross", "auto"):
+            td_mode = "cash"
+        clean_cl_ord_id = re.sub(r"[^a-zA-Z0-9]", "", str(intent.client_order_id))[:32] if intent.client_order_id else ""
         payload = {
             "instId": intent.symbol,
-            "tdMode": self.cfg.td_mode,
+            "tdMode": td_mode,
             "side": intent.side,
             "ordType": "market",
             "sz": self.cfg.fixed_size,
-            "clOrdId": intent.client_order_id[:32] if intent.client_order_id else "",
+            "clOrdId": clean_cl_ord_id,
         }
         if intent.reduce_only:
             payload["reduceOnly"] = "true"
