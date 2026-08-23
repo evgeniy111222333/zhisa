@@ -71,6 +71,33 @@ def _clean_context_feature_name(name: str) -> str:
     return clean or "unknown"
 
 
+def _ctx_unprefixed(name: str) -> str:
+    """Canonical context feature name, independent of the ``ctx_`` prefix.
+
+    The prepared-data merger stores context columns as ``ctx_funding_rate``,
+    ``ctx_open_interest`` … while the ad-hoc live join exposes them without a
+    prefix. Matching on the *cleaned* name (prefix stripped) makes both paths
+    behave identically for the known funding/OI/ratio indicators.
+    """
+    return re.sub(r"^ctx_", "", _clean_context_feature_name(name)) or "unknown"
+
+
+def _seven_day_window(index) -> int:
+    """Rolling window for the '7d' context z-scores in bars.
+
+    The original 2016 constant is 7 days of 5m bars. For a 1h / 15m merged
+    context the same 2016 bars would silently mean 84 / 21 days, i.e. the
+    z-score would stop being a 7-day metric. Derive it from the index
+    frequency instead (5m stays 2016 -> identical behaviour).
+    """
+    if len(index) < 2:
+        return 2016
+    delta = (pd.DatetimeIndex(index)[1:] - pd.DatetimeIndex(index)[:-1]).median()
+    if not isinstance(delta, pd.Timedelta) or delta <= pd.Timedelta(0):
+        return 2016
+    return max(1, int(pd.Timedelta(days=7) / delta))
+
+
 def _numeric_context_columns(df: pd.DataFrame) -> list[str]:
     cols: list[str] = []
     for col in df.columns:
@@ -100,6 +127,15 @@ def _add_market_context_features(
     if not context_cols:
         return
 
+    # Map the canonical (prefix-stripped) name -> raw column so BOTH an
+    # unprefixed live join and the ctx_-prefixed prepared merge are handled:
+    #   ctx_funding_rate, funding_rate  ->  funding_rate
+    by_clean: dict[str, str] = {}
+    for col in context_cols:
+        key = _ctx_unprefixed(col)
+        by_clean.setdefault(key, col)
+    cleaned = list(by_clean.keys())
+
     handled: set[str] = set()
     availability = pd.Series(0.0, index=df.index, dtype=float)
     for col in context_cols:
@@ -113,89 +149,91 @@ def _add_market_context_features(
         out[f"ctx_{_clean_context_feature_name(name)}"] = values
 
     price_cols = [
-        col for col in context_cols
-        if _clean_context_feature_name(col).endswith(_PRICE_CONTEXT_SUFFIXES)
-        or _clean_context_feature_name(col) in {"mark_price", "index_price", "funding_mark_price"}
+        key for key in cleaned
+        if key.endswith(_PRICE_CONTEXT_SUFFIXES)
+        or key in {"mark_price", "index_price", "funding_mark_price"}
     ]
-    for col in price_cols:
-        name = _clean_context_feature_name(col)
-        values = series(col)
-        add(f"{name}_basis", (values - close) / (close + 1e-12))
-        handled.add(col)
+    for key in price_cols:
+        raw = by_clean[key]
+        values = series(raw)
+        add(f"{key}_basis", (values - close) / (close + 1e-12))
+        handled.add(raw)
 
-    for col in context_cols:
-        name = _clean_context_feature_name(col)
-        values = series(col)
-        if name in _DIRECT_CONTEXT_COLUMNS:
-            add(name, values)
-            handled.add(col)
-        elif name in _RATIO_CONTEXT_COLUMNS:
-            add(f"{name}_log", np.log(values.clip(lower=1e-12)))
-            handled.add(col)
-        elif name in _POSITIVE_SIZE_CONTEXT_COLUMNS:
+    for key in cleaned:
+        raw = by_clean[key]
+        values = series(raw)
+        if key in _DIRECT_CONTEXT_COLUMNS:
+            add(key, values)
+            handled.add(raw)
+        elif key in _RATIO_CONTEXT_COLUMNS:
+            add(f"{key}_log", np.log(values.clip(lower=1e-12)))
+            handled.add(raw)
+        elif key in _POSITIVE_SIZE_CONTEXT_COLUMNS:
             positive = values.clip(lower=0.0)
-            add(f"{name}_log1p", np.log1p(positive))
-            add(f"{name}_logret_1", _safe_log(positive).diff())
-            handled.add(col)
+            add(f"{key}_log1p", np.log1p(positive))
+            add(f"{key}_logret_1", _safe_log(positive).diff())
+            handled.add(raw)
 
-    # Specific computed features for known critical indicators
-    if "funding_rate" in df.columns:
-        funding_series = series("funding_rate")
-        # 7 days of 5m candles = 7 * 24 * 12 = 2016
-        fr_mean = funding_series.rolling(2016, min_periods=12).mean()
-        fr_std = funding_series.rolling(2016, min_periods=12).std()
+    # Specific computed features for known critical indicators. The rolling
+    # window is a real 7 days at the bar frequency of the frame.
+    win = _seven_day_window(df.index)
+    mp = 12
+    if "funding_rate" in by_clean:
+        funding_series = series(by_clean["funding_rate"])
+        fr_mean = funding_series.rolling(win, min_periods=mp).mean()
+        fr_std = funding_series.rolling(win, min_periods=mp).std()
         out["ctx_funding_zscore_7d"] = (funding_series - fr_mean) / (fr_std + 1e-12)
 
-    if "open_interest" in df.columns:
-        oi_series = series("open_interest")
-        oi_mean = oi_series.rolling(2016, min_periods=12).mean()
-        oi_std = oi_series.rolling(2016, min_periods=12).std()
+    if "open_interest" in by_clean:
+        oi_series = series(by_clean["open_interest"])
+        oi_mean = oi_series.rolling(win, min_periods=mp).mean()
+        oi_std = oi_series.rolling(win, min_periods=mp).std()
         out["ctx_oi_zscore_7d"] = (oi_series - oi_mean) / (oi_std + 1e-12)
 
-    if "top_trader_long_short_ratio" in df.columns:
-        ls_series = series("top_trader_long_short_ratio")
-        ls_mean = ls_series.rolling(2016, min_periods=12).mean()
-        ls_std = ls_series.rolling(2016, min_periods=12).std()
+    if "top_trader_long_short_ratio" in by_clean:
+        ls_series = series(by_clean["top_trader_long_short_ratio"])
+        ls_mean = ls_series.rolling(win, min_periods=mp).mean()
+        ls_std = ls_series.rolling(win, min_periods=mp).std()
         out["ctx_ls_zscore_7d"] = (ls_series - ls_mean) / (ls_std + 1e-12)
 
-    if {"taker_buy_volume", "taker_sell_volume"}.issubset(df.columns):
-        buy = series("taker_buy_volume")
-        sell = series("taker_sell_volume")
+    if {"taker_buy_volume", "taker_sell_volume"}.issubset(by_clean):
+        buy = series(by_clean["taker_buy_volume"])
+        sell = series(by_clean["taker_sell_volume"])
         total = buy + sell
         add("taker_imbalance", (buy - sell) / (total + 1e-12))
         add("taker_buy_sell_log_ratio", _safe_log_ratio(buy, sell))
-        handled.update({"taker_buy_volume", "taker_sell_volume"})
+        handled.update({by_clean["taker_buy_volume"], by_clean["taker_sell_volume"]})
 
-    if {"kline_taker_buy_volume", "kline_taker_sell_volume"}.issubset(df.columns):
-        buy = series("kline_taker_buy_volume")
-        sell = series("kline_taker_sell_volume")
+    if {"kline_taker_buy_volume", "kline_taker_sell_volume"}.issubset(by_clean):
+        buy = series(by_clean["kline_taker_buy_volume"])
+        sell = series(by_clean["kline_taker_sell_volume"])
         total = buy + sell
         add("kline_taker_imbalance", (buy - sell) / (total + 1e-12))
         add("kline_taker_buy_sell_log_ratio", _safe_log_ratio(buy, sell))
-        handled.update({"kline_taker_buy_volume", "kline_taker_sell_volume"})
+        handled.update({by_clean["kline_taker_buy_volume"], by_clean["kline_taker_sell_volume"]})
 
-    if "volume_delta" in df.columns:
-        delta = series("volume_delta")
-        if "taker_buy_volume" in df.columns and "taker_sell_volume" in df.columns:
-            denom = series("taker_buy_volume") + series("taker_sell_volume")
+    if "volume_delta" in by_clean:
+        delta = series(by_clean["volume_delta"])
+        if "taker_buy_volume" in by_clean and "taker_sell_volume" in by_clean:
+            denom = series(by_clean["taker_buy_volume"]) + series(by_clean["taker_sell_volume"])
         elif volume is not None:
             denom = volume
         else:
             denom = delta.abs()
         add("volume_delta_imbalance", delta / (denom.abs() + 1e-12))
-        handled.add("volume_delta")
+        handled.add(by_clean["volume_delta"])
 
-    if "open_interest" in df.columns and volume is not None:
-        oi = series("open_interest").clip(lower=0.0)
+    if "open_interest" in by_clean and volume is not None:
+        oi = series(by_clean["open_interest"]).clip(lower=0.0)
         add("open_interest_over_volume_log", np.log1p(oi / (volume.clip(lower=0.0) + 1e-12)))
-        handled.add("open_interest")
+        handled.add(by_clean["open_interest"])
 
     # Keep unknown numeric context columns visible, but transform them into
     # scale-tolerant signed log features so one large raw value cannot dominate.
     for col in context_cols:
         if col in handled:
             continue
-        name = _clean_context_feature_name(col)
+        name = _ctx_unprefixed(col)
         values = series(col)
         add(f"{name}_signed_log1p", _log1p_signed(values))
 
