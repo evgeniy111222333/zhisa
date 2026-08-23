@@ -1,0 +1,18 @@
+{
+  "instrument": "BLUR/USDT",
+  "timeframe": "1h",
+  "start": "2023-04-28T12:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 29101,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1043779,
+  "checksum": "bc2ff6bc0f487a6a4f2b7e9f5876af9b",
+  "created_at": "2026-08-23T17:01:53.763077+00:00",
+  "updated_at": "2026-08-23T17:01:53.763077+00:00"
+}

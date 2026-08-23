@@ -1,0 +1,18 @@
+{
+  "instrument": "HBAR/USDT",
+  "timeframe": "1h",
+  "start": "2021-03-17T07:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 47634,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1766055,
+  "checksum": "904a63811aa8b0ff486e1a0fcebe76e8",
+  "created_at": "2026-08-23T16:59:19.727757+00:00",
+  "updated_at": "2026-08-23T16:59:19.727757+00:00"
+}

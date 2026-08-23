@@ -1,0 +1,18 @@
+{
+  "instrument": "AXS/USDT",
+  "timeframe": "1h",
+  "start": "2020-11-20T07:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 50442,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1603175,
+  "checksum": "1f243b8180831b9ad9470f703a431ba3",
+  "created_at": "2026-08-23T17:02:33.309892+00:00",
+  "updated_at": "2026-08-23T17:02:33.309892+00:00"
+}

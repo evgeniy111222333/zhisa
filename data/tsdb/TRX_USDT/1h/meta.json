@@ -2,8 +2,8 @@
   "instrument": "TRX/USDT",
   "timeframe": "1h",
   "start": "2020-10-01T00:00:00+00:00",
-  "end": "2026-06-20T18:00:00+00:00",
-  "row_count": 50111,
+  "end": "2026-08-23T16:00:00+00:00",
+  "row_count": 51645,
   "columns": [
     "open",
     "high",
@@ -11,8 +11,8 @@
     "close",
     "volume"
   ],
-  "size_bytes": 1563876,
-  "checksum": "80ca8327d031cbe9dffec3c8c72ab6ce",
-  "created_at": "2026-06-20T19:09:16.735081+00:00",
-  "updated_at": "2026-06-20T19:09:16.735081+00:00"
+  "size_bytes": 1628000,
+  "checksum": "3c22fbe705ca6455378caaf84a978cee",
+  "created_at": "2026-08-23T16:37:16.824994+00:00",
+  "updated_at": "2026-08-23T16:37:16.824994+00:00"
 }

@@ -2,8 +2,8 @@
   "instrument": "DOGE/USDT",
   "timeframe": "1h",
   "start": "2020-10-01T00:00:00+00:00",
-  "end": "2026-06-20T18:00:00+00:00",
-  "row_count": 50111,
+  "end": "2026-08-23T16:00:00+00:00",
+  "row_count": 51645,
   "columns": [
     "open",
     "high",
@@ -11,8 +11,8 @@
     "close",
     "volume"
   ],
-  "size_bytes": 1892158,
-  "checksum": "bf39baf3c43b269c38270deba052f16b",
-  "created_at": "2026-06-20T19:09:01.438034+00:00",
-  "updated_at": "2026-06-20T19:09:01.438034+00:00"
+  "size_bytes": 1929807,
+  "checksum": "43d68390f085406ec9415eaee6bc0989",
+  "created_at": "2026-08-23T16:37:11.717594+00:00",
+  "updated_at": "2026-08-23T16:37:11.717594+00:00"
 }

@@ -1,0 +1,18 @@
+{
+  "instrument": "ENS/USDT",
+  "timeframe": "1h",
+  "start": "2021-11-30T03:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 41446,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1385720,
+  "checksum": "754ebfa01491207000a2c58fa4577735",
+  "created_at": "2026-08-23T17:01:53.106238+00:00",
+  "updated_at": "2026-08-23T17:01:53.106238+00:00"
+}

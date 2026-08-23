@@ -1,0 +1,18 @@
+{
+  "instrument": "ORDI/USDT",
+  "timeframe": "1h",
+  "start": "2023-11-07T12:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 24469,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 887006,
+  "checksum": "27839bcaf81fc23972bfd0cf45512e2d",
+  "created_at": "2026-08-23T17:02:08.392961+00:00",
+  "updated_at": "2026-08-23T17:02:08.392961+00:00"
+}

@@ -1,0 +1,18 @@
+{
+  "instrument": "AAVE/USDT",
+  "timeframe": "1h",
+  "start": "2020-10-16T07:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 51282,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1664811,
+  "checksum": "57a6f87a3de7699a7ce54d45c564250e",
+  "created_at": "2026-08-23T17:02:32.405249+00:00",
+  "updated_at": "2026-08-23T17:02:32.405249+00:00"
+}

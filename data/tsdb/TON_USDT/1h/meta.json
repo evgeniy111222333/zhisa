@@ -1,0 +1,18 @@
+{
+  "instrument": "TON/USDT",
+  "timeframe": "1h",
+  "start": "2024-03-01T12:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 21709,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 848178,
+  "checksum": "ecda26ddfe8dcc08bd292c2786791b99",
+  "created_at": "2026-08-23T16:59:40.458402+00:00",
+  "updated_at": "2026-08-23T16:59:40.458402+00:00"
+}

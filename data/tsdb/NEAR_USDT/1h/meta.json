@@ -1,0 +1,18 @@
+{
+  "instrument": "NEAR/USDT",
+  "timeframe": "1h",
+  "start": "2020-10-15T08:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 51305,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1600292,
+  "checksum": "ce9692e99a0b0e5b9779c82a9688434d",
+  "created_at": "2026-08-23T16:39:48.384883+00:00",
+  "updated_at": "2026-08-23T16:39:48.384883+00:00"
+}

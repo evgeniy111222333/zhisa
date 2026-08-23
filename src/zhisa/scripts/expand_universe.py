@@ -35,18 +35,68 @@ logger = get_logger(__name__)
 
 TSDB_ROOT = Path("data/tsdb")
 CTX_ROOT = Path("data/futures_context/binance_usdm")
+MIN_TS = int(pd.Timestamp("2019-01-01", tz="UTC").timestamp() * 1000)
 
 
-def fetch_1h_full(sym_ccxt: str, end_ts: int, start_ms: int = 1577836800000,
-                  limit: int = 1500) -> pd.DataFrame:
+def _get(sym: str, params: dict, retries: int = 8) -> list:
+    """API GET with rate-limit backoff (Binance 429)."""
+    import time
+    from urllib.error import HTTPError
+    for attempt in range(retries):
+        try:
+            return _fetch_api_json("/fapi/v1/klines", params)
+        except HTTPError as e:
+            if e.code == 429 or e.code == 418:
+                time.sleep(1.5 + attempt * 1.0)
+                continue
+            raise
+    raise HTTPError(None, 429, "rate limit exhausted", None, None)
+
+
+def _resolve_listing_start(sym: str, end_ms: int) -> int:
+    """Smallest startTime that does not 400 (binary search the listing time)."""
+    from urllib.error import HTTPError
+    lo, hi = MIN_TS, end_ms - 3600_000
+    if lo > hi:
+        return MIN_TS
+
+    def ok(ts: int) -> bool:
+        try:
+            _get(sym, {"symbol": sym, "interval": "1h",
+                       "startTime": ts, "endTime": end_ms, "limit": 1})
+            return True
+        except HTTPError as e:
+            return e.code != 400
+
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if ok(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def fetch_1h_full(sym_ccxt: str, end_ts: int, limit: int = 1500) -> pd.DataFrame:
+    from urllib.error import HTTPError
     sym = futures_context_symbol_slug(sym_ccxt)
     rows: list[dict] = []
-    cursor = start_ms
+    try:
+        cursor = _resolve_listing_start(sym, end_ts)
+    except HTTPError as e:
+        if e.code == 400:  # symbol not available via klines endpoint
+            print(f"  ! skip {sym}: klines unavailable (HTTP 400)")
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        raise
     while cursor <= end_ts:
-        data = _fetch_api_json("/fapi/v1/klines", {
-            "symbol": sym, "interval": "1h",
-            "startTime": cursor, "endTime": end_ts, "limit": limit,
-        })
+        try:
+            data = _get(sym, {
+                "symbol": sym, "interval": "1h",
+                "startTime": cursor, "endTime": end_ts, "limit": limit,
+            })
+        except HTTPError as e:
+            print(f"  ! {sym}: HTTP {e.code} at {cursor}, stopping paging")
+            break
         if not data:
             break
         for k in data:
@@ -82,7 +132,7 @@ def main(argv=None) -> int:
                     help="also download funding/OI context for each symbol")
     ap.add_argument("--context-only", action="store_true",
                     help="skip OHLCV; only download context for the listed symbols")
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=int, default=3)
     args = ap.parse_args(argv)
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -95,7 +145,10 @@ def main(argv=None) -> int:
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             futs = {ex.submit(ingest_symbol, s, db, end_ts): s for s in symbols}
             for f in as_completed(futs):
-                print(" ", f.result())
+                try:
+                    print(" ", f.result())
+                except Exception as exc:
+                    print("  ! symbol failed:", type(exc).__name__, exc)
 
     if args.with_context:
         ctx_need = [s for s in symbols if not canonical_path(CTX_ROOT, s).exists()]

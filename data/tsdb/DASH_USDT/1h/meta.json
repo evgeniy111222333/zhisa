@@ -1,0 +1,18 @@
+{
+  "instrument": "DASH/USDT",
+  "timeframe": "1h",
+  "start": "2020-02-04T08:00:00+00:00",
+  "end": "2026-08-23T00:00:00+00:00",
+  "row_count": 57401,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1669973,
+  "checksum": "cbcd5a2a72e7f79762416e213010cabe",
+  "created_at": "2026-08-23T17:00:33.353866+00:00",
+  "updated_at": "2026-08-23T17:00:33.353866+00:00"
+}
