@@ -1,4 +1,4 @@
-﻿"""Train the S1 self-supervised policy on a market dataset.
+"""Train the S1 self-supervised policy on a market dataset.
 
 Produces a checkpoint at ``--checkpoint`` (default ``artifacts/s1/model.pt``)
 that the S2 supervised trainer can resume from.
@@ -25,6 +25,7 @@ from zhisa.data.render_contract import (
     load_checkpoint,
     resolve_render_contract,
 )
+from zhisa.features.channel_dropout import ChannelDropoutSpec
 from zhisa.features.normalization import NormalizationSpec
 from zhisa.models.policy import build_default_policy
 from zhisa.rendering.spec import RenderSpec
@@ -69,6 +70,17 @@ def _ssl_config_from(cfg) -> SSLConfig:
         use_masked_modeling=bool(s.get("use_masked_modeling", True)),
         use_temporal_contrast=bool(s.get("use_temporal_contrast", True)),
         use_cross_modal=bool(s.get("use_cross_modal", True)),
+        temporal_bank_size=int(s.get("temporal_bank_size", 0)),
+        temporal_bank_warmup=int(s.get("temporal_bank_warmup", 128)),
+        temporal_hard_offsets=tuple(
+            int(x) for x in (s.get("temporal_hard_offsets", []) or [])
+        ),
+        lr_schedule=str(s.get("lr_schedule", "constant")),
+        cosine_min_scale=float(s.get("cosine_min_scale", 0.003)),
+        total_steps=int(s.get("total_steps", 0)),
+        weight_trunk_align=float(s.get("weight_trunk_align", 0.0)),
+        trunk_align_momentum=float(s.get("trunk_align_momentum", 0.0)),
+        instrument_contrast_w=float(s.get("instrument_contrast_w", 0.0)),
         augment_transforms=tuple(
             str(x) for x in (s.get("augment_transforms", []) or [])
         ),
@@ -118,6 +130,7 @@ def _market_datasets_from_frame(
     normalization: NormalizationSpec | None = None,
     render_engine: str = "cpu",
     instruments: list[str] | None = None,
+    channel_dropout: Optional[ChannelDropoutSpec] = None,
 ) -> list[MarketDataset]:
     """Build datasets per symbol and contiguous time segment.
 
@@ -156,6 +169,24 @@ def _market_datasets_from_frame(
             segment_ids = market.index.to_series().diff().ne(expected_delta).cumsum()
             segments = list(market.groupby(segment_ids, sort=False))
         min_segment_bars = spec.chart_window + max(spec.horizons, default=0) + 2
+        # Lineage reuse guard (cheap, once at the first symbol): probe this
+        # root's segments against the existing chart store BEFORE any render
+        # work. Screams when a ~zero-reuse full render is about to start
+        # (ZHISA_FORCE_RENDER=1 overrides; ZHISA_LINEAGE_GUARD=0 disables).
+        if (
+            charts_cache_dir
+            and os.environ.get("ZHISA_LINEAGE_GUARD", "1") != "0"
+            and symbol == next(iter(frame.groupby("symbol", sort=True)))[0]
+        ):
+            from zhisa.data.lineage import guard_reuse
+            seg_df = [s for _, s in segments if len(s) >= min_segment_bars][:3]
+            guard_reuse(
+                Path(charts_cache_dir), seg_df, spec.chart_window,
+                render_spec or RenderSpec(size=spec.image_size),
+                min_reuse_ratio=0.34,
+                render_hint=f"full render for {symbol} (n={len(market)})",
+                trim=spec.chart_window + max(spec.horizons, default=0) + 1,
+            )
         for segment_id, segment in segments:
             if len(segment) < min_segment_bars:
                 continue
@@ -190,6 +221,7 @@ def _market_datasets_from_frame(
                 chart_source=chart_source,
                 normalization=normalization,
                 instrument_id=_instr_id,
+                channel_dropout=channel_dropout,
             )
             feature_dims.add(
                 (ds._features_df.shape[1], ds._time_features_df.shape[1])
@@ -300,6 +332,20 @@ def main(argv: list[str] | None = None) -> int:
 
     norm_spec = _norm_spec_from(args, cfg)
 
+    # Optional numeric-stream Channel Dropout (train-only, keyed/seed-
+    # deterministic): mirrors the chart-side KeyedAugmentor. Enabled by a
+    # ``features.channel_dropout`` block in the YAML config; off by default.
+    _cd_block = ((cfg.get("features", {}) or {}) if cfg else {}).get("channel_dropout") or {}
+    channel_dropout = (
+        ChannelDropoutSpec(
+            p=float(_cd_block.get("p", 0.15)),
+            max_channels=int(_cd_block.get("max_channels", 3)),
+            pair_bucket=int(_cd_block.get("pair_bucket", 16)),
+        )
+        if _cd_block
+        else None
+    )
+
     # Data
     chart_window = int(cfg.get("chart_window", 32)) if cfg else 32
     image_size = int(cfg.get("image_size", 32)) if cfg else 32
@@ -335,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
             render_chunk=args.render_chunk,
             render_engine=args.render_engine,
             normalization=norm_spec,
+            channel_dropout=channel_dropout,
             instruments=train_symbols,
         )
         del train_frame
@@ -353,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                 render_chunk=args.render_chunk,
                 render_engine=args.render_engine,
                 normalization=norm_spec,
+                channel_dropout=channel_dropout,
                 instruments=train_symbols,
             )
             del val_frame

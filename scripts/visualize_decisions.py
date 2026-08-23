@@ -10,16 +10,9 @@ import matplotlib.pyplot as plt
 
 from zhisa.backtest.engine import run_backtest
 from zhisa.env.trading_env import EnvConfig
-from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
 from zhisa.features.ohlcv import compute_ohlcv_features
-
-def _checkpoint_policy_config(ckpt: dict) -> dict:
-    for key in ("model_config", "policy_config", "config"):
-        cfg = ckpt.get(key)
-        if isinstance(cfg, dict) and "window" in cfg and "in_numeric_features" in cfg:
-            return cfg
-    return {}
 
 def _model_policy(model, device: str = "cpu"):
     model.eval()
@@ -43,25 +36,15 @@ def main():
     add_market_data_args(parser)
     args = parser.parse_args()
 
-    # Load Model
+    # Load Model (full PolicyConfig from the checkpoint: ColumnFormer,
+    # TokenFusion, macro gate, embed_dim etc. are all restored, not ignored).
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = _checkpoint_policy_config(ckpt)
-    model = build_default_policy(
-        in_numeric_features=60,
-        in_context_features=10,
-        window=128,
-        image_size=128,
-        n_actions=9,
-        n_regime_classes=4,
-    )
-    # Exclude reconstructor keys from policy network
-    policy_state = {k: v for k, v in ckpt["model"].items() if not k.startswith("reconstructor.")}
-    model.load_state_dict(policy_state, strict=False)
+    model = build_policy_from_checkpoint(ckpt)
     policy = _model_policy(model)
 
     env_cfg = EnvConfig()
-    env_cfg.window = 128
-    env_cfg.image_size = 128
+    env_cfg.window = int(model.cfg.window)
+    env_cfg.image_size = int(model.cfg.image_size)
 
     # Load Data
     df = load_market_dataframe(args, seed=42, default_bars=args.bars)

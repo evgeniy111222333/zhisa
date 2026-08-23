@@ -13,33 +13,23 @@ from zhisa.backtest.reports import print_metrics
 from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
 from zhisa.data.render_contract import assert_serving_render
-from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
 from zhisa.utils.seeding import set_seed
 
 
-def _checkpoint_policy_config(ckpt: dict) -> dict:
-    """Return the saved PolicyConfig dict from a checkpoint, if present."""
-    for key in ("model_config", "policy_config", "config"):
-        cfg = ckpt.get(key)
-        if isinstance(cfg, dict) and "window" in cfg and "in_numeric_features" in cfg:
-            return cfg
-    return {}
-
-
 def _model_policy(model, device: str = "cpu"):
+    """Serving policy with a REAL rolling memory session (S4 parity).
+
+    Keeps working-memory state across steps; the episode starts cold (zeros)
+    exactly like an S4 rollout episode. History continuity is the whole point
+    — the legacy closure re-passed zeros on every step.
+    """
     model.eval()
     model.to(device)
+    from zhisa.models.session import make_stateful_policy, session_step
 
-    def _p(obs):
-        with torch.no_grad():
-            chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(device)
-            num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(device)
-            ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(device)
-            out = model(chart=chart, numeric=num, context=ctx)
-            return int(out["policy_logits"].argmax(dim=-1).item())
-
-    return _p
+    return make_stateful_policy(model)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,17 +46,10 @@ def main(argv: list[str] | None = None) -> int:
     env_cfg = EnvConfig()
     if args.checkpoint and Path(args.checkpoint).exists():
         ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        cfg = _checkpoint_policy_config(ckpt)
-        model = build_default_policy(
-            in_numeric_features=int(cfg.get("in_numeric_features", 32)),
-            in_context_features=int(cfg.get("in_context_features", 10)),
-            window=int(cfg.get("window", 32)),
-            image_size=int(cfg.get("image_size", EnvConfig.image_size)),
-        )
-        model.load_state_dict(ckpt["model"])
+        model = build_policy_from_checkpoint(ckpt)
         policy = _model_policy(model)
-        env_cfg.window = int(cfg.get("window", env_cfg.window))
-        env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        env_cfg.window = int(model.cfg.window)
+        env_cfg.image_size = int(model.cfg.image_size)
         assert_serving_render(ckpt, env_cfg.image_size)
     if policy is None:
         rng = np.random.default_rng(0)

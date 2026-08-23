@@ -109,6 +109,18 @@ def _resolve_optim_schedule(cfg: OptimConfig, *, train_len: int, batch_size: int
     return cfg
 
 
+def _memory_training_flags(cfg) -> dict:
+    """Memory-session training flags parsed from the YAML (sequential fit,
+    warm evaluation, sensitivity logging). Single source of truth used when
+    constructing TrainConfig — a forgotten wiring here silently falls back
+    to the non-sequential path."""
+    return {
+        "sequential_memory": bool(cfg.get("sequential_memory", False) if cfg else False),
+        "eval_warm": bool(cfg.get("eval_warm", True) if cfg else True),
+        "memory_sensitivity_log": bool(cfg.get("memory_sensitivity_log", True) if cfg else True),
+    }
+
+
 def _loss_weights_from(cfg) -> LossWeights:
     raw = (cfg.get("loss_weights", {}) or {}) if cfg else {}
     defaults = LossWeights()
@@ -791,8 +803,12 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError(f"unknown class_balance mode: {balance!r}")
 
     loss_weights = _loss_weights_from(cfg)
+    loss_adaptive = bool((cfg.get("loss_adaptive", False) if cfg else False))
+    adaptive_clamp = float((cfg.get("adaptive_clamp", 4.0) if cfg else 4.0))
     loss = MultiTaskLoss(
         loss_weights,
+        learnable=loss_adaptive,
+        adaptive_clamp=adaptive_clamp,
         label_smoothing=float(cfg.get("label_smoothing", 0.05)) if cfg else 0.05,
         direction_class_weights=direction_weights,
         regime_class_weights=regime_weights,
@@ -895,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         flat_ratio_min=float(cfg.get("flat_ratio_min", 0.0) if cfg else 0.0),
         flat_ratio_max=float(cfg.get("flat_ratio_max", 10.0) if cfg else 10.0),
         optim=optim_cfg,
+        **_memory_training_flags(cfg),
     )
     teacher_model = None
     if warm_start_payload is not None and (

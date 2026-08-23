@@ -133,3 +133,17 @@ def test_temporal_pair_shares_mask_with_bucket():
 
     assert expected.issubset(masked_cols(a.numpy()))
     assert expected.issubset(masked_cols(b.numpy()))
+
+
+def test_cross_asset_family_includes_v4_columns():
+    """Regression (#2): v4 cross-asset columns must belong to the SAME
+    semantic family as the legacy ones so ChannelDropout drops them together
+    (never independent wholesale drops of correlated market columns)."""
+    from zhisa.features.channel_dropout import channel_family
+
+    for name in ("resid_alpha_64", "breadth_256", "dispersion_256",
+                 "market_vol_128", "market_index_vw_logret", "vw_weight_256",
+                 "leadlag_avg_1", "beta_up_64", "corr_stress_64"):
+        assert channel_family(name) == "cross_asset", name
+    for name in ("logret_1", "bb_upper", "vol_z", "ctx_funding"):
+        assert channel_family(name) != "cross_asset", name

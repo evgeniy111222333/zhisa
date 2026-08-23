@@ -16,11 +16,10 @@ from zhisa.backtest.reports import print_metrics, save_report
 from zhisa.env.actions import DiscreteAction
 from zhisa.env.trading_env import EnvConfig
 from zhisa.data.render_contract import assert_serving_render
-from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, frame_summary, load_market_dataframe
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
 from zhisa.scripts.backtest import (
     TorchModelPolicy,
-    _checkpoint_policy_config,
     _checkpoint_policy_metadata,
     _random_policy,
     _warn_if_checkpoint_not_trading_ready,
@@ -40,19 +39,10 @@ def _load_policy(checkpoint: str | None, *, device: str = "cpu", seed: int = 0):
     if checkpoint and Path(checkpoint).exists():
         ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
         _warn_if_checkpoint_not_trading_ready(ckpt, checkpoint)
-        cfg = _checkpoint_policy_config(ckpt)
         meta = _checkpoint_policy_metadata(ckpt)
-        model = build_default_policy(
-            in_numeric_features=int(cfg.get("in_numeric_features", 32)),
-            in_context_features=int(cfg.get("in_context_features", 10)),
-            window=int(cfg.get("window", 32)),
-            image_size=int(cfg.get("image_size", env_cfg.image_size)),
-            n_actions=int(cfg.get("n_actions", 9)),
-            n_regime_classes=int(cfg.get("n_regime_classes", 4)),
-        )
-        model.load_state_dict(ckpt["model"])
-        env_cfg.window = int(cfg.get("window", env_cfg.window))
-        env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        model = build_policy_from_checkpoint(ckpt)
+        env_cfg.window = int(model.cfg.window)
+        env_cfg.image_size = int(model.cfg.image_size)
         assert_serving_render(ckpt, env_cfg.image_size)
         return TorchModelPolicy(model, device=device), env_cfg, "checkpoint", meta
     print("No checkpoint provided; using random policy for no-money smoke replay.")

@@ -1,0 +1,1144 @@
+{
+  "behaviour_random": {
+    "alignment_cos": -0.0457,
+    "cpc_forward": {
+      "mean_cos": 0.9823,
+      "top1_in_batch": 0.6875
+    },
+    "finite": true,
+    "internals": {
+      "augment_invariance_cos": 0.9998574256896973,
+      "chart_noise_angle_deg": 0.0466,
+      "embedding_pairwise_cos_mean": 0.99564,
+      "embedding_top10_var_share": 0.9123256206512451,
+      "eval_determinism_max_delta": 0.0
+    },
+    "masked_recon": {
+      "gain_vs_baseline": 0.622,
+      "masked_mse": 1.41169,
+      "mean_baseline_mse": 0.87827
+    },
+    "norm_mean": 9.6355,
+    "numeric_perturb_1pct": {
+      "angle_deg_additive": 0.0192,
+      "angle_deg_scale": 0.0385,
+      "delta_norm": 0.00659,
+      "post_perturb_cos_additive": 1.0,
+      "post_perturb_cos_scale": 1.0
+    },
+    "tag": "random_init",
+    "temporal_autocorr_cos": {
+      "BTC_USDT": [
+        0.9997,
+        0.9996,
+        0.9997,
+        0.9999,
+        0.9996,
+        0.9995,
+        0.9996,
+        0.9998,
+        0.9995,
+        0.9994,
+        0.9995,
+        0.9997
+      ],
+      "TRX_USDT": [
+        0.9997,
+        0.9996,
+        0.9996,
+        0.9999,
+        0.9996,
+        0.9995,
+        0.9996,
+        0.9998,
+        0.9996,
+        0.9994,
+        0.9995,
+        0.9997
+      ]
+    }
+  },
+  "behaviour_trained": {
+    "alignment_cos": 0.0941,
+    "cpc_forward": {
+      "mean_cos": 0.9063,
+      "top1_in_batch": 1.0
+    },
+    "finite": true,
+    "internals": {
+      "augment_invariance_cos": 0.9828531742095947,
+      "chart_noise_angle_deg": 0.2324,
+      "embedding_pairwise_cos_mean": 0.20791,
+      "embedding_top10_var_share": 0.8784005045890808,
+      "eval_determinism_max_delta": 0.0
+    },
+    "masked_recon": {
+      "gain_vs_baseline": 1.208,
+      "masked_mse": 0.72695,
+      "mean_baseline_mse": 0.87827
+    },
+    "norm_mean": 5.0977,
+    "numeric_perturb_1pct": {
+      "angle_deg_additive": 0.4347,
+      "angle_deg_scale": 0.8215,
+      "delta_norm": 0.06833,
+      "post_perturb_cos_additive": 0.99997,
+      "post_perturb_cos_scale": 0.99989
+    },
+    "tag": "trained_best",
+    "temporal_autocorr_cos": {
+      "BTC_USDT": [
+        0.9348,
+        0.8347,
+        0.8908,
+        0.9635,
+        0.891,
+        0.7876,
+        0.8413,
+        0.9013,
+        0.8263,
+        0.7277,
+        0.7799,
+        0.833
+      ],
+      "TRX_USDT": [
+        0.8344,
+        0.8129,
+        0.8429,
+        0.9507,
+        0.7914,
+        0.7794,
+        0.7996,
+        0.8857,
+        0.7438,
+        0.7399,
+        0.7471,
+        0.8211
+      ]
+    }
+  },
+  "best": "D:\\zhisa\\checkpoints\\phase2_heavy_v2_5\\phase2_heavy_v2_5_last.pt",
+  "best_last_weight_l2": 378.631,
+  "best_meta": {
+    "best_val_total": 0.7192866802215576,
+    "completed_epochs": 6,
+    "step": 43000,
+    "val_totals_per_epoch": [
+      0.7983,
+      0.7194,
+      0.7317,
+      0.7344,
+      0.7193,
+      0.9814
+    ],
+    "warm_start_from": null
+  },
+  "ema_student_cos_mean": 0.9188,
+  "instrument_emb": {
+    "max_offdiag_cos": 0.5795,
+    "mean_offdiag_cos": 0.0454
+  },
+  "instrument_separation_silhouette": 0.0075,
+  "knn_thumbnails": [
+    {
+      "neighbors": [
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n0.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n1.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n2.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n3.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n4.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q0_n5.png"
+      ],
+      "query_index": 256
+    },
+    {
+      "neighbors": [
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n0.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n1.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n2.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n3.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n4.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q1_n5.png"
+      ],
+      "query_index": 538
+    },
+    {
+      "neighbors": [
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n0.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n1.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n2.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n3.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n4.png",
+        "D:\\zhisa\\docs\\forensics_v2_5\\knn_q2_n5.png"
+      ],
+      "query_index": 2432
+    }
+  ],
+  "last": "D:\\zhisa\\checkpoints\\phase2_heavy_v2_5\\phase2_heavy_v2_5_last.pt",
+  "last_meta": {
+    "best_val_total": 0.7192866802215576,
+    "completed_epochs": 6,
+    "step": 43000,
+    "val_totals_per_epoch": [
+      0.7983,
+      0.7194,
+      0.7317,
+      0.7344,
+      0.7193,
+      0.9814
+    ],
+    "warm_start_from": null
+  },
+  "model_config_short": {
+    "embed_dim": 384,
+    "encoder_ff_mult": 4.0,
+    "fusion_layers": 4,
+    "memory_layers": 4,
+    "n_instruments": 12,
+    "numeric_layers": 4,
+    "numeroc_causal": null,
+    "vision_mode": "columnformer"
+  },
+  "weight_stats_best": {
+    "near_zero_total_frac": 0.0013,
+    "per_layer": {
+      "context.instrument_emb.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.9740228652954102
+      },
+      "context.net.0.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.11978866904973984
+      },
+      "context.net.0.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.11262230575084686
+      },
+      "context.net.3.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.05114853009581566
+      },
+      "context.net.3.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.050948064774274826
+      },
+      "fusion.encoder.layers.0.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029181547462940216
+      },
+      "fusion.encoder.layers.0.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029468320310115814
+      },
+      "fusion.encoder.layers.0.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.01477504801005125
+      },
+      "fusion.encoder.layers.0.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014731179922819138
+      },
+      "fusion.encoder.layers.0.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036081526428461075
+      },
+      "fusion.encoder.layers.0.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.0.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02945960871875286
+      },
+      "fusion.encoder.layers.1.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029181547462940216
+      },
+      "fusion.encoder.layers.1.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029468320310115814
+      },
+      "fusion.encoder.layers.1.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.01477504801005125
+      },
+      "fusion.encoder.layers.1.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014731179922819138
+      },
+      "fusion.encoder.layers.1.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036081526428461075
+      },
+      "fusion.encoder.layers.1.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.1.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02945960871875286
+      },
+      "fusion.encoder.layers.2.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029181547462940216
+      },
+      "fusion.encoder.layers.2.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029468320310115814
+      },
+      "fusion.encoder.layers.2.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.01477504801005125
+      },
+      "fusion.encoder.layers.2.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014731179922819138
+      },
+      "fusion.encoder.layers.2.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036081526428461075
+      },
+      "fusion.encoder.layers.2.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.encoder.layers.2.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02945960871875286
+      },
+      "fusion.norm.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.norm.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "fusion.out_proj.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.030511874705553055
+      },
+      "fusion.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029486242681741714
+      },
+      "fusion.pos_pe": {
+        "near_zero_frac": 0.0,
+        "std": 0.020001860335469246
+      },
+      "fusion.query": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "fusion.type_emb.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.9979122281074524
+      },
+      "heads.direction.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.06711312383413315
+      },
+      "heads.direction.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.05141850933432579
+      },
+      "heads.policy_logits.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.04588962718844414
+      },
+      "heads.policy_logits.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.050015319138765335
+      },
+      "heads.regime.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.08658653497695923
+      },
+      "heads.regime.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.05092373862862587
+      },
+      "heads.return_pred.bias": {
+        "near_zero_frac": 0.0,
+        "std": NaN
+      },
+      "heads.return_pred.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.04961661621928215
+      },
+      "heads.risk.bias": {
+        "near_zero_frac": 0.0,
+        "std": NaN
+      },
+      "heads.risk.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.05128292366862297
+      },
+      "heads.shared.0.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029524685814976692
+      },
+      "heads.shared.0.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029472853988409042
+      },
+      "heads.uncertainty_logit.bias": {
+        "near_zero_frac": 0.0,
+        "std": NaN
+      },
+      "heads.uncertainty_logit.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.04945903643965721
+      },
+      "heads.value.bias": {
+        "near_zero_frac": 0.0,
+        "std": NaN
+      },
+      "heads.value.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.051542431116104126
+      },
+      "heads.volatility.bias": {
+        "near_zero_frac": 0.0,
+        "std": NaN
+      },
+      "heads.volatility.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.04947524890303612
+      },
+      "memory.encoder.layers.0.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.03008120134472847
+      },
+      "memory.encoder.layers.0.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029479000717401505
+      },
+      "memory.encoder.layers.0.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014997044578194618
+      },
+      "memory.encoder.layers.0.linear2.weight": {
+        "near_zero_frac": 0.0001,
+        "std": 0.01473959069699049
+      },
+      "memory.encoder.layers.0.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036146070808172226
+      },
+      "memory.encoder.layers.0.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02949448674917221
+      },
+      "memory.encoder.layers.1.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.03008120134472847
+      },
+      "memory.encoder.layers.1.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029479000717401505
+      },
+      "memory.encoder.layers.1.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014997044578194618
+      },
+      "memory.encoder.layers.1.linear2.weight": {
+        "near_zero_frac": 0.0001,
+        "std": 0.01473959069699049
+      },
+      "memory.encoder.layers.1.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036146070808172226
+      },
+      "memory.encoder.layers.1.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02949448674917221
+      },
+      "memory.encoder.layers.2.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.03008120134472847
+      },
+      "memory.encoder.layers.2.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029479000717401505
+      },
+      "memory.encoder.layers.2.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014997044578194618
+      },
+      "memory.encoder.layers.2.linear2.weight": {
+        "near_zero_frac": 0.0001,
+        "std": 0.01473959069699049
+      },
+      "memory.encoder.layers.2.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036146070808172226
+      },
+      "memory.encoder.layers.2.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02949448674917221
+      },
+      "memory.encoder.layers.3.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.03008120134472847
+      },
+      "memory.encoder.layers.3.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029479000717401505
+      },
+      "memory.encoder.layers.3.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014997044578194618
+      },
+      "memory.encoder.layers.3.linear2.weight": {
+        "near_zero_frac": 0.0001,
+        "std": 0.01473959069699049
+      },
+      "memory.encoder.layers.3.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.036146070808172226
+      },
+      "memory.encoder.layers.3.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02949448674917221
+      },
+      "memory.norm.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.norm.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.pos.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.9938349723815918
+      },
+      "memory_in_norm.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory_in_norm.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory_scale": {
+        "near_zero_frac": 1.0,
+        "std": NaN
+      },
+      "numeric.cls": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029763711616396904
+      },
+      "numeric.encoder.layers.0.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029487377032637596
+      },
+      "numeric.encoder.layers.0.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014845624566078186
+      },
+      "numeric.encoder.layers.0.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014727471396327019
+      },
+      "numeric.encoder.layers.0.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606221079826355
+      },
+      "numeric.encoder.layers.0.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.0.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029464321210980415
+      },
+      "numeric.encoder.layers.1.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029763711616396904
+      },
+      "numeric.encoder.layers.1.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029487377032637596
+      },
+      "numeric.encoder.layers.1.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014845624566078186
+      },
+      "numeric.encoder.layers.1.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014727471396327019
+      },
+      "numeric.encoder.layers.1.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606221079826355
+      },
+      "numeric.encoder.layers.1.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.1.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029464321210980415
+      },
+      "numeric.encoder.layers.2.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029763711616396904
+      },
+      "numeric.encoder.layers.2.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029487377032637596
+      },
+      "numeric.encoder.layers.2.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014845624566078186
+      },
+      "numeric.encoder.layers.2.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014727471396327019
+      },
+      "numeric.encoder.layers.2.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606221079826355
+      },
+      "numeric.encoder.layers.2.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.2.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029464321210980415
+      },
+      "numeric.encoder.layers.3.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029763711616396904
+      },
+      "numeric.encoder.layers.3.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029487377032637596
+      },
+      "numeric.encoder.layers.3.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014845624566078186
+      },
+      "numeric.encoder.layers.3.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014727471396327019
+      },
+      "numeric.encoder.layers.3.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606221079826355
+      },
+      "numeric.encoder.layers.3.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.encoder.layers.3.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029464321210980415
+      },
+      "numeric.norm.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "numeric.norm.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "numeric.out_proj.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.03002171590924263
+      },
+      "numeric.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.029511241242289543
+      },
+      "numeric.patch_proj.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.052603017538785934
+      },
+      "numeric.patch_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.05087318271398544
+      },
+      "vision.encoder.layers.0.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029724184423685074
+      },
+      "vision.encoder.layers.0.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02946740947663784
+      },
+      "vision.encoder.layers.0.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014631573110818863
+      },
+      "vision.encoder.layers.0.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014720425009727478
+      },
+      "vision.encoder.layers.0.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606954962015152
+      },
+      "vision.encoder.layers.0.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.0.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02948909066617489
+      },
+      "vision.encoder.layers.1.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029724184423685074
+      },
+      "vision.encoder.layers.1.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02946740947663784
+      },
+      "vision.encoder.layers.1.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014631573110818863
+      },
+      "vision.encoder.layers.1.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014720425009727478
+      },
+      "vision.encoder.layers.1.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606954962015152
+      },
+      "vision.encoder.layers.1.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.1.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02948909066617489
+      },
+      "vision.encoder.layers.2.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029724184423685074
+      },
+      "vision.encoder.layers.2.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02946740947663784
+      },
+      "vision.encoder.layers.2.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014631573110818863
+      },
+      "vision.encoder.layers.2.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014720425009727478
+      },
+      "vision.encoder.layers.2.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606954962015152
+      },
+      "vision.encoder.layers.2.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.2.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02948909066617489
+      },
+      "vision.encoder.layers.3.linear1.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.029724184423685074
+      },
+      "vision.encoder.layers.3.linear1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02946740947663784
+      },
+      "vision.encoder.layers.3.linear2.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.014631573110818863
+      },
+      "vision.encoder.layers.3.linear2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.014720425009727478
+      },
+      "vision.encoder.layers.3.norm1.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.norm1.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.norm2.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.norm2.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.self_attn.in_proj_bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.self_attn.in_proj_weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03606954962015152
+      },
+      "vision.encoder.layers.3.self_attn.out_proj.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.encoder.layers.3.self_attn.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02948909066617489
+      },
+      "vision.freq_proj.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.14749836921691895
+      },
+      "vision.freq_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.1434524655342102
+      },
+      "vision.merge.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.027912238612771034
+      },
+      "vision.merge.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.027282018214464188
+      },
+      "vision.norm.bias": {
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "vision.norm.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "vision.out_proj.bias": {
+        "near_zero_frac": 0.0,
+        "std": 0.028734125196933746
+      },
+      "vision.out_proj.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.02949672006070614
+      },
+      "vision.proj_price.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.03402627259492874
+      },
+      "vision.proj_vol.weight": {
+        "near_zero_frac": 0.0,
+        "std": 0.05881041660904884
+      },
+      "vision.query": {
+        "near_zero_frac": 0.0,
+        "std": 0.021353572607040405
+      }
+    },
+    "total_params": 29139414
+  }
+}

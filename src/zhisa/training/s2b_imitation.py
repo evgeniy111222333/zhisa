@@ -50,10 +50,13 @@ def _batched_collate(batch: list[dict]) -> dict:
 
     The stock :func:`zhisa.data.dataset._batched_collate` is hardcoded
     to the supervised keys, so BC and DAgger need a variant that also
-    stacks the per-sample ``action`` tensor.
+    stacks the per-sample ``action`` tensor. Like the stock collate, it
+    keeps ``instrument_id`` and (when any sample carries it)
+    ``macro_numeric`` so a macro-enabled policy actually trains its
+    macro branch instead of silently seeing zeros.
     """
     keys_tensor = (
-        "chart", "numeric", "context",
+        "chart", "numeric", "context", "instrument_id",
         "label_dir", "label_vol", "label_risk", "label_regime", "label_ret", "mask",
         "action",
     )
@@ -61,6 +64,16 @@ def _batched_collate(batch: list[dict]) -> dict:
     for k in keys_tensor:
         if k in batch[0]:
             out[k] = torch.stack([b[k] for b in batch], dim=0)
+    # Heterogeneous batches (DAgger mixes static pairs that carry macro with
+    # env-derived aggregated pairs that don't): stack macro whenever at least
+    # one sample has it, filling the rest with zeros (the same convention the
+    # policy uses when macro_numeric is None).
+    if any("macro_numeric" in b for b in batch):
+        ref = next(b["macro_numeric"] for b in batch if "macro_numeric" in b)
+        out["macro_numeric"] = torch.stack([
+            b["macro_numeric"] if "macro_numeric" in b else torch.zeros_like(ref)
+            for b in batch
+        ], dim=0)
     out["meta"] = [b.get("meta", {}) for b in batch]
     return out
 from zhisa.data.expert import ExpertPolicy, SymmetricUtilityExpert, TripleBarrierExpert
@@ -68,6 +81,7 @@ from zhisa.data.synthetic import MarketConfig, generate_market
 from zhisa.env.actions import DiscreteAction
 from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.models.policy import PolicyConfig, PolicyNetwork
+from zhisa.models.session import session_start, session_step
 from zhisa.training.losses import LossWeights, MultiTaskLoss
 from zhisa.training.optim import OptimConfig, build_optimizer, build_scheduler
 from zhisa.utils.logging import get_logger
@@ -277,7 +291,20 @@ def _train_bc_one_epoch(
         num = batch["numeric"].to(device, non_blocking=device.type == "cuda")
         ctx = batch["context"].to(device, non_blocking=device.type == "cuda")
         action = batch["action"].to(device, non_blocking=device.type == "cuda")
-        out = model(chart=chart, numeric=num, context=ctx)
+        macro = batch.get("macro_numeric")
+        macro_numeric = (
+            macro.to(device, non_blocking=device.type == "cuda")
+            if macro is not None else None
+        )
+        instr = batch.get("instrument_id")
+        instrument_id = (
+            instr.to(device, non_blocking=device.type == "cuda")
+            if instr is not None else None
+        )
+        out = model(
+            chart=chart, numeric=num, context=ctx,
+            macro_numeric=macro_numeric, instrument_id=instrument_id,
+        )
         targets = {
             "label_dir": batch["label_dir"].to(device, non_blocking=device.type == "cuda"),
             "label_vol": batch["label_vol"].to(device, non_blocking=device.type == "cuda"),
@@ -329,7 +356,20 @@ def _evaluate_bc(
         num = batch["numeric"].to(device, non_blocking=device.type == "cuda")
         ctx = batch["context"].to(device, non_blocking=device.type == "cuda")
         action = batch["action"].to(device, non_blocking=device.type == "cuda")
-        out = model(chart=chart, numeric=num, context=ctx)
+        macro = batch.get("macro_numeric")
+        macro_numeric = (
+            macro.to(device, non_blocking=device.type == "cuda")
+            if macro is not None else None
+        )
+        instr = batch.get("instrument_id")
+        instrument_id = (
+            instr.to(device, non_blocking=device.type == "cuda")
+            if instr is not None else None
+        )
+        out = model(
+            chart=chart, numeric=num, context=ctx,
+            macro_numeric=macro_numeric, instrument_id=instrument_id,
+        )
         probs = torch.softmax(out["policy_logits"], dim=-1)
         predicted = probs.argmax(dim=-1)
         targets = {
@@ -663,6 +703,10 @@ def _rollout_policy_for_aggregation(
     model.eval()
     for ep in range(n_episodes):
         obs, _ = env.reset(seed=int(rng.integers(0, 2**31 - 1)))
+        # Rolling working-memory session per episode (S4/serve parity):
+        # a cold start at reset, then history kept across every step so the
+        # aggregated pairs carry real encoder history, not a stateless pass.
+        state = session_start(model, 1)
         ep_ret = 0.0
         steps = 0
         for _ in range(max_steps):
@@ -670,11 +714,8 @@ def _rollout_policy_for_aggregation(
             expert_action = int(expert.predict(env.df, t))
             obs_list.append(obs)
             actions_list.append(expert_action)
-            chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(device)
-            num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(device)
-            ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(device)
             with torch.no_grad():
-                out = model(chart=chart, numeric=num, context=ctx)
+                out, state = session_step(model, obs, state)
                 logits = out["policy_logits"]
                 if not torch.isfinite(logits).all():
                     action = int(rng.integers(0, env.action_space.n))
@@ -705,13 +746,27 @@ class _AggregatedPairs(Dataset):
     aggregated pairs.
     """
 
-    def __init__(self, charts: np.ndarray, nums: np.ndarray, ctxs: np.ndarray, actions: np.ndarray):
+    def __init__(
+        self,
+        charts: np.ndarray,
+        nums: np.ndarray,
+        ctxs: np.ndarray,
+        actions: np.ndarray,
+        *,
+        instrument_id: int = 0,
+        macro_shape: Optional[tuple[int, int]] = None,
+    ):
         if not (len(charts) == len(nums) == len(ctxs) == len(actions)):
             raise ValueError("charts / nums / ctxs / actions must have the same length")
         self.charts = charts
         self.nums = nums
         self.ctxs = ctxs
         self.actions = actions
+        self._instrument_id = int(instrument_id)
+        # (macro_window, in_macro_features) of the policy. The env obs carries
+        # no macro stream, so aggregated pairs fill zeros (same convention as
+        # ``PolicyNetwork`` substituting zeros when macro_numeric is None).
+        self._macro_shape = macro_shape
 
     def __len__(self) -> int:
         return len(self.actions)
@@ -719,7 +774,7 @@ class _AggregatedPairs(Dataset):
     def __getitem__(self, i: int) -> dict:
         T = self.nums.shape[1]
         F = self.nums.shape[2]
-        return {
+        sample = {
             "chart": torch.from_numpy(self.charts[i]).float(),
             "numeric": torch.from_numpy(self.nums[i]).float(),
             "context": torch.from_numpy(self.ctxs[i]).float(),
@@ -730,8 +785,14 @@ class _AggregatedPairs(Dataset):
             "label_ret": torch.tensor(0.0, dtype=torch.float32),
             "mask": torch.ones(T, dtype=torch.bool),
             "action": torch.tensor(int(self.actions[i]), dtype=torch.long),
+            "instrument_id": torch.tensor(self._instrument_id, dtype=torch.long),
             "meta": {"t": -1, "ts": "", "instrument": "agg"},
         }
+        if self._macro_shape is not None:
+            sample["macro_numeric"] = torch.zeros(
+                self._macro_shape, dtype=torch.float32
+            )
+        return sample
 
 
 class DAggerTrainer:
@@ -865,7 +926,13 @@ class DAggerTrainer:
                 agg_nums = np.zeros((0,) + tuple(sample["numeric"].shape), dtype=np.float32)
                 agg_ctxs = np.zeros((0,) + tuple(sample["context"].shape), dtype=np.float32)
                 agg_acts = np.zeros(0, dtype=np.int64)
-            agg_ds = _AggregatedPairs(agg_charts, agg_nums, agg_ctxs, agg_acts)
+            agg_ds = _AggregatedPairs(
+                agg_charts, agg_nums, agg_ctxs, agg_acts,
+                macro_shape=(
+                    (int(self.model.cfg.macro_window), int(self.model.cfg.in_macro_features))
+                    if self.model.cfg.use_macro_context else None
+                ),
+            )
             # Concat-loader: chain static and aggregated.
             combined = torch.utils.data.ConcatDataset([labeled, agg_ds])
             combined_loader = build_dataloader(

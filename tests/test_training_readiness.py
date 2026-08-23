@@ -546,6 +546,10 @@ class TestS4PPOTraining:
             embed_dim=64, window=32,
         )
         ppo_cfg = PPOConfig(
+            # n_iterations defaults to 100 (full training); this is a smoke
+            # test of the fit loop, so 3 iterations is plenty and cuts the
+            # runtime from ~4 min to a few seconds.
+            n_iterations=3,
             n_episodes=2,
             max_steps_per_episode=50,
             n_epochs=2,

@@ -61,6 +61,10 @@ class PortfolioPolicyConfig:
     cross_attn_heads: int = 4
     cross_attn_dropout: float = 0.0
     cross_attn_feedforward_mult: int = 4
+    # Additive correlation bias support in the legacy stack (needs
+    # corr_bias in forward; see PortfolioTrunkPolicy for the upgraded path).
+    cross_attn_bias: bool = False
+    cross_attn_bias_gate: float = 1.0
     field_overrides: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -126,6 +130,8 @@ class PortfolioPolicyNetwork(nn.Module):
                 n_heads=cfg.cross_attn_heads, dropout=cfg.cross_attn_dropout,
                 feedforward_mult=cfg.cross_attn_feedforward_mult,
                 n_instruments_max=max(cfg.n_instruments, 8),
+                use_attention_bias=cfg.cross_attn_bias,
+                bias_gate=cfg.cross_attn_bias_gate,
             ))
             self.cross_attn.set_portfolio_dim(cfg.portfolio_dim)
         else:
@@ -164,12 +170,26 @@ class PortfolioPolicyNetwork(nn.Module):
         self,
         instruments: dict,
         portfolio: torch.Tensor,
+        corr_bias: Optional[torch.Tensor] = None,
     ) -> dict:
         embeds = self.encode_instruments(
             instruments["chart"], instruments["numeric"], instruments["context"]
         )
         if self.cross_attn is not None:
-            embeds = self.cross_attn(embeds, portfolio=portfolio)
+            if self.cfg.cross_attn_bias:
+                if corr_bias is None:
+                    raise ValueError(
+                        "cross_attn_bias=True requires corr_bias (B,N,N) — "
+                        "e.g. PortfolioEnv.corr_matrix(); or use "
+                        "PortfolioTrunkPolicy for the S1-trunk stack"
+                    )
+                embeds = self.cross_attn(embeds, portfolio=portfolio, bias=corr_bias)
+            else:
+                if corr_bias is not None:
+                    raise ValueError(
+                        "corr_bias given but cross_attn_bias=False in config"
+                    )
+                embeds = self.cross_attn(embeds, portfolio=portfolio)
         B = embeds.size(0)
         flat = torch.cat([embeds.reshape(B, -1), portfolio], dim=-1)
         fused = self.portfolio_mlp(flat)

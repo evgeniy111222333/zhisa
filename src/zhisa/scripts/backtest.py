@@ -15,8 +15,8 @@ from zhisa.backtest.regime_ab import RegimeABConfig, run_regime_ab_backtest
 from zhisa.data.synthetic import generate_market  # kept for test monkeypatch compatibility
 from zhisa.env.trading_env import EnvConfig
 from zhisa.data.render_contract import assert_serving_render
-from zhisa.models.policy import build_default_policy
 from zhisa.scripts._real_data import add_market_data_args, load_market_dataframe
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
 from zhisa.utils.seeding import set_seed
 
 
@@ -64,14 +64,15 @@ class TorchModelPolicy:
         self.device = device
         self.model.eval()
         self.model.to(self.device)
+        from zhisa.models.session import make_stateful_policy
+        # ONE rolling-memory session across the whole backtest (S4/serve parity)
+        self._call = make_stateful_policy(model)
+        self._state = None
 
     def logits(self, obs) -> torch.Tensor:
-        with torch.no_grad():
-            chart = torch.from_numpy(obs["chart"]).unsqueeze(0).to(self.device)
-            num = torch.from_numpy(obs["numeric"]).unsqueeze(0).to(self.device)
-            ctx = torch.from_numpy(obs["context"]).unsqueeze(0).to(self.device)
-            out = self.model(chart=chart, numeric=num, context=ctx)
-            return out["policy_logits"].squeeze(0).detach().cpu()
+        from zhisa.models.session import session_step
+        out, self._state = session_step(self.model, obs, self._state)
+        return out["policy_logits"].squeeze(0).detach().cpu()
 
     def __call__(self, obs) -> int:
         return int(self.logits(obs).argmax(dim=-1).item())
@@ -98,19 +99,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.checkpoint and Path(args.checkpoint).exists():
         ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
         _warn_if_checkpoint_not_trading_ready(ckpt, args.checkpoint)
-        cfg = _checkpoint_policy_config(ckpt)
-        model = build_default_policy(
-            in_numeric_features=int(cfg.get("in_numeric_features", 32)),
-            in_context_features=int(cfg.get("in_context_features", 10)),
-            window=int(cfg.get("window", 32)),
-            image_size=int(cfg.get("image_size", EnvConfig.image_size)),
-            n_actions=int(cfg.get("n_actions", 9)),
-            n_regime_classes=int(cfg.get("n_regime_classes", 4)),
-        )
-        model.load_state_dict(ckpt["model"])
+        model = build_policy_from_checkpoint(ckpt)
         policy = TorchModelPolicy(model)
-        env_cfg.window = int(cfg.get("window", env_cfg.window))
-        env_cfg.image_size = int(cfg.get("image_size", env_cfg.image_size))
+        env_cfg.window = int(model.cfg.window)
+        env_cfg.image_size = int(model.cfg.image_size)
         assert_serving_render(ckpt, env_cfg.image_size)
     else:
         policy = _random_policy(args.seed)

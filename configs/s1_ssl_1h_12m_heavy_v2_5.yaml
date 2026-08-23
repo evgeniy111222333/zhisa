@@ -1,0 +1,75 @@
+# S1 Phase A (1h) — HEAVY v2.5 (fine-tune continuation of v2 best).
+# Changes vs v2 (evidence-gated):
+#   - numeric_causal: false  (v1-style bidirectional; masked-recon gain
+#     1.42 -> target >=2.3; causal semantics move to pair construction +
+#     window contract; vision was already non-causal in v1/v2)
+#   - weight_trunk_align 0.25 / trunk_align_momentum 0.99 (trunk-level
+#     alignment, A/B: trunk_cos +3.6x vs base)
+#   - instrument_contrast_w 0.02 (fix embedding collisions 0.44-0.56)
+# Launch: resume from phase2_heavy_v2_best.pt with --resume-from,
+# lr 1.5e-4 (half), warmup 500, 3 epochs, cosine decay.
+seed: 0
+device: cuda
+epochs: 9
+batch_size: 64
+chart_window: 128
+image_size: 128
+
+model:
+  embed_dim: 384
+  vision_mode: columnformer
+  vision_n_layers: 4
+  vision_n_heads: 8
+  vision_causal: true
+  vision_reader: attention_pool
+  token_fusion: true
+  fusion_token_layers: 3
+  fusion_token_heads: 8
+  freq_branch: true
+  freq_k: 8
+  numeric_layers: 4
+  numeric_causal: false
+  fusion_layers: 4
+  memory_layers: 4
+  memory_max_len: 128
+  # The v2.5 checkpoint was trained on a PolicyConfig WITHOUT the residual
+  # memory feature (no memory_in_norm / memory_scale params). Keep these off
+  # so the resumed architecture matches the checkpoint exactly and the
+  # optimizer state dict restores fully (param-count parity).
+  memory_residual: false
+  memory_input_norm: false
+  n_instruments: 12
+  encoder_ff_mult: 4.0
+  dropout: 0.1
+
+optim:
+  lr: 0.00015
+  weight_decay: 0.0001
+  warmup_steps: 500
+
+ssl:
+  projection_dim: 128
+  hidden_dim: 256
+  temperature: 0.1
+  mask_ratio: 0.5
+  ema_decay: 0.996
+  weight_temporal: 1.0
+  weight_masked: 1.0
+  weight_alignment: 0.5
+  grad_clip: 1.0
+  log_every: 50
+  temporal_horizon: 4
+  val_max_batches: 64
+  checkpoint_every_steps: 500
+  use_ema_teacher: true
+  use_masked_modeling: true
+  use_temporal_contrast: true
+  use_cross_modal: true
+  weight_trunk_align: 0.25
+  trunk_align_momentum: 0.99
+  instrument_contrast_w: 0.02
+  lr_schedule: cosine
+  cosine_min_scale: 0.003
+  total_steps: 18500
+  temporal_bank_size: 0
+  temporal_hard_offsets: []

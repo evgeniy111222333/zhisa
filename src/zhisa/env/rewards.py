@@ -11,6 +11,29 @@ from dataclasses import dataclass, field
 from typing import Deque, Optional
 
 import numpy as np
+import pandas as pd
+
+# Project-wide annualisation default for crypto bars: 5-minute bars per year.
+# US-equities' ``252`` daily bars only applies to daily OHLC — using it on
+# crypto intraday frames understates the Sharpe bonus by sqrt(252/periods).
+PERIODS_PER_YEAR = 365 * 24 * 12
+
+
+def infer_periods_per_year(index) -> float:
+    """Bars per (365-day) year inferred from a DatetimeIndex's median gap.
+
+    Returns :data:`PERIODS_PER_YEAR` when the frequency cannot be determined
+    (irregular index, too few bars, non-datetime index).
+    """
+    try:
+        if index is None or len(index) < 2:
+            return float(PERIODS_PER_YEAR)
+        gap = index.to_series().diff().median()
+        if pd.isna(gap) or gap <= pd.Timedelta(0):
+            return float(PERIODS_PER_YEAR)
+        return float(pd.Timedelta(days=365) / gap)
+    except (TypeError, AttributeError, ValueError):
+        return float(PERIODS_PER_YEAR)
 
 
 @dataclass
@@ -33,14 +56,20 @@ class RewardState:
     last_equity: float = 1.0
     returns_window: Deque[float] = field(default_factory=lambda: deque(maxlen=128))
     liquidated: bool = False
+    # Bars per year for Sharpe annualisation (crypto intraday != 252).
+    periods_per_year: float = PERIODS_PER_YEAR
 
 
-def reset_reward_state(initial_equity: float = 1.0) -> RewardState:
+def reset_reward_state(
+    initial_equity: float = 1.0,
+    periods_per_year: float = PERIODS_PER_YEAR,
+) -> RewardState:
     return RewardState(
         equity=initial_equity,
         peak_equity=initial_equity,
         last_equity=initial_equity,
         returns_window=deque(maxlen=128),
+        periods_per_year=periods_per_year,
     )
 
 
@@ -74,7 +103,8 @@ def compute_reward(
     sharpe = 0.0
     if arr.size >= 8:
         std = arr.std(ddof=1) if arr.size > 1 else 0.0
-        sharpe = (arr.mean() / (std + 1e-9)) * np.sqrt(252.0)
+        periods = max(float(state.periods_per_year), 1.0)
+        sharpe = (arr.mean() / (std + 1e-9)) * np.sqrt(periods)
 
     # ``turnover`` is already executed notional divided by equity. Multiplying
     # it by the position delta again would square the size of partial trades.

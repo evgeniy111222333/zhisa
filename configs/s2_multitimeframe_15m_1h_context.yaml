@@ -94,6 +94,16 @@ loss_weights:
   policy: 0.0
   value: 0.0
   uncertainty: 0.0
+  uncertainty_warmup: 500
+
+sequential_memory: true
+memory_residual: true
+
+# Adaptive (Kendall) multi-task weighting: learns per-task confidence on top
+# of the priors above (clamped exp(-log_var) in [e^-4, e^4]; seeded from
+# measured task scales; frozen during the warmup window).
+loss_adaptive: true
+adaptive_clamp: 4.0
 
 direction_multi_horizon_weights: [1.00, 0.85, 0.08]
 return_multi_horizon_weights: [1.00, 0.75, 0.03]

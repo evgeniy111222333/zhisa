@@ -27,9 +27,11 @@ from zhisa.data.labeling import TripleBarrierConfig, triple_barrier
 from zhisa.env.actions import DiscreteAction
 from zhisa.env.execution import ExecutionConfig, execute_order
 from zhisa.env.rewards import (
+    PERIODS_PER_YEAR,
     RewardState,
     RewardWeights,
     compute_reward,
+    infer_periods_per_year,
     reset_reward_state,
 )
 from zhisa.features.ohlcv import compute_ohlcv_features, normalize_feature_window
@@ -70,7 +72,7 @@ class EnvConfig:
     # medium datasets. Set to False if you need pixel-exact
     # matplotlib renders in the cache (e.g. for visual debugging).
     # The resulting charts are visually similar but not byte-equal
-    # to a matplotlib render — both still go through the same
+    # to a matplotlib render РІР‚вЂќ both still go through the same
     # ``render_chart`` entry point, just via different code paths.
     prefetch_use_fast_renderer: bool = True
     seed: Optional[int] = 0
@@ -98,6 +100,21 @@ class EnvConfig:
     funding_rate: float = 0.0         # per-funding-interval, signed
     funding_interval: int = 0         # 0 -> disabled; e.g. 96 for 8h at 5min bars
     funding_column: str = ""          # if set, read from df[col] instead of fixed
+    # ---- Prepared-feature mode (S1/S2 feature parity) --------------------
+    # When ``use_prepared_numeric`` is True the per-instrument numeric obs is
+    # built from ``prepared_feature_columns`` present in the dataframe
+    # (e.g. cross-asset v3.1 columns) instead of the internal OHLCV feature
+    # set. Chart renders stay OHLCV-based. This puts the S1/S2 prepared root
+    # directly behind the env (portfolio path included РІР‚вЂќ PortfolioEnv wraps
+    # TradingEnv instances).
+    use_prepared_numeric: bool = False
+    prepared_feature_columns: tuple = ()
+    # Bars per year used to annualise the Sharpe term of the reward. Crypto
+    # intraday frames are NOT 252 days a year (1h=8760, 15m=35040, 5m=105120),
+    # and a hardcoded 252 understates the bonus by ~sqrt(252/periods). 0 means
+    # infer from the DataFrame's DatetimeIndex frequency (see
+    # :func:`zhisa.env.rewards.infer_periods_per_year`).
+    periods_per_year: float = 0.0
 
 
 class TradingEnv(gym.Env):
@@ -112,16 +129,29 @@ class TradingEnv(gym.Env):
         cfg = cfg or EnvConfig()
         self.cfg = cfg
         self.df = df.reset_index(drop=False)
+        if cfg.periods_per_year and cfg.periods_per_year > 0:
+            self.periods_per_year = float(cfg.periods_per_year)
+        else:
+            self.periods_per_year = infer_periods_per_year(df.index)
         self._features = compute_ohlcv_features(
             df,
             include_volume=cfg.include_volume,
             include_indicators=cfg.include_indicators,
         ).reset_index(drop=True)
+        if cfg.use_prepared_numeric:
+            cols = list(cfg.prepared_feature_columns)
+            missing = [c for c in cols if c not in df.columns]
+            if missing:
+                raise ValueError(
+                    f"use_prepared_numeric: frame missing columns {missing} "
+                    f"(prepared_feature_columns={cols})"
+                )
+            self._features = df[cols].reset_index(drop=True)
         self._time = compute_time_features(df).reset_index(drop=True)
         # Numeric obs carries only OHLCV-derived features. Cyclic time
         # embeddings go into ``context`` (last bar) so the env contract
         # matches :class:`PolicyConfig`'s ``in_numeric_features=32`` and
-        # ``in_context_features=10`` defaults — i.e. ``build_default_policy()``
+        # ``in_context_features=10`` defaults РІР‚вЂќ i.e. ``build_default_policy()``
         # and ``TradingEnv()`` are wire-compatible out of the box.
         n_numeric_features = self._features.shape[1]
         n_context_features = self._time.shape[1]
@@ -160,7 +190,9 @@ class TradingEnv(gym.Env):
             target_annual_vol=cfg.risk_limits.target_annual_vol,
         )
         self._risk = RiskGuard(risk_limits)
-        self._reward_state = reset_reward_state(cfg.initial_equity)
+        self._reward_state = reset_reward_state(
+            cfg.initial_equity, periods_per_year=self.periods_per_year
+        )
         self._rng = np.random.default_rng(cfg.seed)
         # Pre-render every rolling-window chart once if requested.
         # The cache is indexed by end-bar ``t - 1`` so ``_obs`` can
@@ -200,7 +232,9 @@ class TradingEnv(gym.Env):
         self._equity = cfg.initial_equity
         self._peak_equity = cfg.initial_equity
         self._info_extra: dict = {}
-        self._reward_state = reset_reward_state(cfg.initial_equity)
+        self._reward_state = reset_reward_state(
+            cfg.initial_equity, periods_per_year=self.periods_per_year
+        )
         self._risk.reset_state(cfg.initial_equity)
         self._turnover = 0.0
         self._last_position = 0.0
@@ -216,7 +250,7 @@ class TradingEnv(gym.Env):
         end = self._t
         # Fast path: chart was pre-rendered during env construction.
         # ``self._chart_cache`` is indexed by end-bar ``t`` and stores
-        # the chart for the window ``[t - window, t)`` — bit-exact to
+        # the chart for the window ``[t - window, t)`` РІР‚вЂќ bit-exact to
         # what ``render_chart`` would have produced.
         if self._chart_cache is not None:
             chart = self._chart_cache[end - 1]
@@ -248,7 +282,7 @@ class TradingEnv(gym.Env):
 
         Memory: ``(T - window + 1) * 3 * image_size**2 * 4`` bytes
         (~24 MB for 10000 bars at 32x32). For T=100k and 64x64 that
-        is ~4.5 GB — callers should ensure they want this.
+        is ~4.5 GB РІР‚вЂќ callers should ensure they want this.
 
         Implementation note: we slice pre-extracted numpy arrays into
         a tiny per-window DataFrame instead of ``self.df.iloc[]`` on
@@ -322,7 +356,7 @@ class TradingEnv(gym.Env):
             # Corrupted entry price: fall back to "no unrealised PnL".
             return self._equity
         if price is None:
-            price = float(self.df["close"].iloc[self._t])
+            price = float(self.df["close"].iloc[min(self._t, len(self.df) - 1)])
         ret = (price / self._avg_entry) - 1.0
         return self._equity + self._position * cfg.max_leverage * ret
 
@@ -333,7 +367,7 @@ class TradingEnv(gym.Env):
 
         Returns ``(triggered, exit_price, reason)``. Conservative fill
         (the default) assumes the *unfavourable* side was hit first
-        when both SL and TP are inside the bar — this avoids hindsight
+        when both SL and TP are inside the bar РІР‚вЂќ this avoids hindsight
         bias in backtests.
         """
         cfg = self.cfg
@@ -416,6 +450,13 @@ class TradingEnv(gym.Env):
 
     def step(self, action: int) -> Tuple[dict, float, bool, bool, dict]:
         cfg = self.cfg
+        # Defence: stepping an ALREADY-terminated episode (t is beyond the
+        # last valid bar) would read df.iloc[len(df)] and crash with an
+        # IndexError. The legitimate FINAL step (t == len-1) still executes —
+        # only post-terminal calls get this no-op response.
+        if self._t >= len(self.df):
+            return (self._obs(), 0.0, True, False,
+                    {"error": "episode_already_terminated"})
         if not self.action_space.contains(int(action)):
             raise ValueError(f"Invalid action: {action}")
         self._last_exit_reason = ""
@@ -469,7 +510,7 @@ class TradingEnv(gym.Env):
 
         # 3. Risk guard. If the action is *reducing* the absolute
         #    position (closing or partial-closing), always allow it
-        #    in full — the trader must always be able to de-risk.
+        #    in full РІР‚вЂќ the trader must always be able to de-risk.
         requested_target = float(target)
         risk_allowed = True
         risk_reason = "de_risk_bypass"
@@ -559,7 +600,7 @@ class TradingEnv(gym.Env):
             self._position = float(new_position)
             self._equity -= fill.fee
         elif target == 0.0 and self._position == 0.0:
-            # Manual close without a fill — clear position bookkeeping.
+            # Manual close without a fill РІР‚вЂќ clear position bookkeeping.
             self._avg_entry = 0.0
             self._peak_price = 0.0
 
@@ -619,7 +660,7 @@ class TradingEnv(gym.Env):
         # included in reward and info so validation/CVaR cannot avoid exit
         # costs by carrying exposure beyond the sampled horizon.
         if (terminated or truncated) and cfg.liquidate_on_episode_end and self._position != 0.0:
-            terminal_price = float(self.df["close"].iloc[self._t])
+            terminal_price = float(self.df["close"].iloc[min(self._t, len(self.df) - 1)])
             terminal_size = abs(self._position) * cfg.max_leverage / max(terminal_price, 1e-12)
             terminal_fill = execute_order(
                 side=-int(np.sign(self._position)),

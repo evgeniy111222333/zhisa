@@ -31,7 +31,7 @@ _FAMILY_PATTERNS: tuple[tuple[str, str], ...] = (
     ("rsi", r"^rsi_\d+$"),
     ("donchian", r"^don_"),
     ("vwap", r"^vwap"),
-    ("cross_asset", r"^(rel_logret_1|beta_|corr_|volume_ratio_|volvol_ratio_)"),
+    ("cross_asset", r"^(rel_logret_1|beta_|corr_|volume_ratio_|volvol_ratio_|resid_alpha_|breadth_|dispersion_|market_vol_|leadlag_|market_index_|vw_weight_|beta_up_|beta_down_|corr_stress_)"),
     ("context", r"^ctx_"),
 )
 

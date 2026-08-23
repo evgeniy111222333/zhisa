@@ -63,6 +63,7 @@ from gymnasium import spaces
 
 from zhisa.env.actions import DiscreteAction
 from zhisa.env.rewards import (
+    PERIODS_PER_YEAR,
     RewardState,
     RewardWeights,
     compute_reward,
@@ -240,7 +241,12 @@ class PortfolioEnv(gym.Env):
         self._initial_equity: float = float(cfg.env_cfg.initial_equity)
         self._equity: float = self._initial_equity
         self._peak_equity: float = self._initial_equity
-        self._reward_state: RewardState = reset_reward_state(self._initial_equity)
+        self._periods_per_year: float = (
+            float(self._envs[0].periods_per_year) if self._envs else float(PERIODS_PER_YEAR)
+        )
+        self._reward_state: RewardState = reset_reward_state(
+            self._initial_equity, periods_per_year=self._periods_per_year
+        )
         self._return_history: list[np.ndarray] = [
             np.zeros(0, dtype=np.float32) for _ in range(self.n_instruments)
         ]
@@ -287,6 +293,29 @@ class PortfolioEnv(gym.Env):
         out = np.zeros(self._n_corr_features, dtype=np.float32)
         m = min(len(vals), self._n_corr_features)
         out[:m] = vals[:m]
+        return out
+
+    def corr_matrix(self) -> np.ndarray:
+        """(N, N) pairwise return correlation matrix over the same causal
+        window used for the cov vector — the corr_bias source for
+        :class:`~zhisa.models.portfolio_trunk_policy.PortfolioTrunkPolicy`
+        (and legacy ``corr_bias``). Symmetric, unit diagonal, NaN -> 0."""
+        min_len = min(len(h) for h in self._return_history) if self._return_history else 0
+        if min_len < 2 or self.n_instruments <= 1:
+            return np.eye(self.n_instruments, dtype=np.float32)
+        n = min(self._corr_window, min_len)
+        stacked = np.stack([h[-n:] for h in self._return_history], axis=1)  # (n, N)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            corr = np.corrcoef(stacked, rowvar=False)
+        if corr.ndim == 0:
+            corr = np.array([[float(corr)]])
+        corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        # enforce symmetry + unit diagonal numerically
+        corr = 0.5 * (corr + corr.T)
+        np.fill_diagonal(corr, 1.0)
+        out = np.zeros((self.n_instruments, self.n_instruments), dtype=np.float32)
+        m = min(self.n_instruments, corr.shape[0])
+        out[:m, :m] = corr[:m, :m]
         return out
 
     def _portfolio_summary(self) -> np.ndarray:
@@ -387,7 +416,9 @@ class PortfolioEnv(gym.Env):
         self._t_start = self._t
         self._equity = self._initial_equity
         self._peak_equity = self._initial_equity
-        self._reward_state = reset_reward_state(self._initial_equity)
+        self._reward_state = reset_reward_state(
+            self._initial_equity, periods_per_year=self._periods_per_year
+        )
         self._return_history = [
             np.zeros(0, dtype=np.float32) for _ in range(self.n_instruments)
         ]

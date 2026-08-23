@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader, WeightedRandomSampler
@@ -70,6 +71,14 @@ class TrainConfig:
     guard_min_flat_pred_target_ratio: float = 0.0
     guard_max_flat_pred_target_ratio: float = 10.0
     guard_penalty_scale: float = 0.0
+    # Rolling working-memory mode: samples each symbol-segment in time order
+    # and feeds the model its real rolling history (S4 parity). Off by
+    # default so existing runs keep their exact behaviour.
+    sequential_memory: bool = False
+    # Evaluate under the warm (rolling) contract as well when sequential.
+    eval_warm: bool = True
+    # Sensivity target > 0 means "memory actually uses history" (1 - cos).
+    memory_sensitivity_log: bool = True
     direction_distill_weight: float = 0.0
     direction_multi_distill_weight: float = 0.0
     direction_distill_temperature: float = 2.0
@@ -220,6 +229,12 @@ class SupervisedTrainer:
         self._best_val_total = float("inf")
         self._best_val_metric = float("-inf") if cfg.champion_mode == "max" else float("inf")
         self._early_stopping_bad_epochs = 0
+        # Adaptive (Kendall) loss-weight state: seed once early, freeze during
+        # the warmup window, then let the log-variances train.
+        self._adaptive_seeded = False
+        self._adaptive_acc: dict[str, float] = {}
+        self._adaptive_n = 0
+        self._adaptive_unsupported = self.loss.log_vars is None
 
     def seed_best_from_validation(
         self,
@@ -327,6 +342,16 @@ class SupervisedTrainer:
         }
 
     def fit(self, train_ds: MarketDataset, val_ds: Optional[MarketDataset] = None) -> dict:
+        if self.cfg.sequential_memory:
+            if self.train_sample_weights is not None:
+                logger.warning(
+                    "sequential_memory mode ignores train_sample_weights "
+                    "(kept None); class balance via loss weights/order"
+                )
+            return self._fit_sequential(train_ds, val_ds)
+        return self._fit_shuffled(train_ds, val_ds)
+
+    def _fit_shuffled(self, train_ds, val_ds=None) -> dict:
         cfg = self.cfg
         sampler = None
         shuffle = True
@@ -352,6 +377,10 @@ class SupervisedTrainer:
             self.model.train()
             encoder_trainable = epoch >= cfg.freeze_encoder_epochs
             self._set_encoder_trainable(encoder_trainable)
+            if not self._adaptive_unsupported and not self._adaptive_seeded:
+                # Freeze the Kendall weights until we have sampled task scales
+                # (then seed) and until the warmup window passes (then unfreeze).
+                self.loss.set_log_vars_trainable(False)
             ep_sums: dict[str, float] = {}
             ep_count = 0
             timer.start()
@@ -364,11 +393,17 @@ class SupervisedTrainer:
                     macro_numeric=batch_d["macro_numeric"],
                 )
                 losses = self.loss(out, batch_d)
+                self._adaptive_step(losses)
                 self._add_finetune_regularizers(losses, out, batch_d)
                 loss = losses["total"]
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), cfg.grad_clip)
+                # The optimizer also trains the adaptive (Kendall) log-var
+                # parameters of the loss; their gradients must be clipped too.
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.model.parameters()) + list(self.loss.parameters()),
+                    cfg.grad_clip,
+                )
                 self.opt.step()
                 if self.sched is not None:
                     self.sched.step()
@@ -404,6 +439,11 @@ class SupervisedTrainer:
                 "encoder_trainable": encoder_trainable,
                 "components": {k: v for k, v in averages.items() if k != "total"},
             }
+            if self.loss.log_vars is not None:
+                record["eff_weights"] = {
+                    k: round(float(v), 4)
+                    for k, v in self.loss.effective_weights().items()
+                }
             logger.info("epoch %d done in %.1fs, avg_loss=%.5f", epoch, timer.elapsed, avg)
             timer.reset()
             if val_ds is not None and cfg.eval_every and (epoch + 1) % cfg.eval_every == 0:
@@ -468,6 +508,238 @@ class SupervisedTrainer:
                 )
         self._set_encoder_trainable(True)
         return {"history": list(self._history), "final_step": self._step}
+
+    def _adaptive_step(self, losses: dict[str, torch.Tensor]) -> None:
+        """Kendall-weight bookkeeping: accumulate raw task scales, seed once,
+        and unfreeze after the warmup window."""
+        if self._adaptive_unsupported:
+            return
+        warmup = int(getattr(self.loss.weights, "uncertainty_warmup", 200) or 0)
+        if not self._adaptive_seeded:
+            for k, v in losses.items():
+                if k == "total":
+                    continue
+                if torch.is_tensor(v) and torch.isfinite(v):
+                    self._adaptive_acc[k] = self._adaptive_acc.get(k, 0.0) + float(v.item())
+            self._adaptive_n += 1
+            if self._adaptive_n >= max(5, min(warmup, 20)):
+                # ``_adaptive_acc`` accumulates SUMS over the warmup batches;
+                # ``seed_log_vars_from_losses`` expects per-batch MEANS
+                # (log_var = ln(prior * mean)). Without the division the initial
+                # log_var is inflated by ln(N) (~+3 for N=20) and every adaptive
+                # weight starts ~N times too small.
+                means = {
+                    k: v / max(1.0, float(self._adaptive_n))
+                    for k, v in self._adaptive_acc.items()
+                }
+                self.loss.seed_log_vars_from_losses(means)
+                self._adaptive_seeded = True
+            if not self._adaptive_seeded:
+                return
+        if self._adaptive_seeded and self._step >= warmup:
+            self.loss.set_log_vars_trainable(True)
+
+    def _iter_ordered_batches(self, ds, batch_size: int, *, max_batches: int = 0,
+                              shuffle_leaves: bool = False, epoch: int = 0):
+        """Yield ``(batch, leaf)`` in strict time order per symbol-segment.
+
+        A leaf is either a single dataset or one child of a ConcatDataset.
+        The order within a leaf is the dataset index order (causal, locked);
+        only the LEAF order may be shuffled (when requested).
+        """
+        leaves = list(ds.datasets) if isinstance(ds, ConcatDataset) else [ds]
+        if shuffle_leaves and len(leaves) > 1:
+            rng = np.random.default_rng(int(self.cfg.seed) + 10_000 + int(epoch))
+            leaves = [leaves[i] for i in rng.permutation(len(leaves))]
+        n_batches = 0
+        for leaf in leaves:
+            for start in range(0, len(leaf), batch_size):
+                indices = list(range(start, min(start + batch_size, len(leaf))))
+                batch = multimodal_collate([leaf[i] for i in indices])
+                yield batch, leaf
+                n_batches += 1
+                if max_batches > 0 and n_batches >= max_batches:
+                    return
+
+    def _fit_sequential(self, train_ds, val_ds=None) -> dict:
+        """Sequential-memory fine-tune: rolling history parity with S4/serve."""
+        cfg = self.cfg
+        timer = Timer()
+        for epoch in range(self._completed_epochs, cfg.epochs):
+            self.model.train()
+            encoder_trainable = epoch >= cfg.freeze_encoder_epochs
+            self._set_encoder_trainable(encoder_trainable)
+            if not self._adaptive_unsupported and not self._adaptive_seeded:
+                self.loss.set_log_vars_trainable(False)
+            ep_sums: dict[str, float] = {}
+            ep_count = 0
+            timer.start()
+            roll_state = None  # session state; reset at every leaf boundary
+            roll_leaf = None
+            for batch, _leaf in self._iter_ordered_batches(
+                train_ds, cfg.batch_size, shuffle_leaves=True, epoch=epoch
+            ):
+                # new leaf => cold episode start (zeros), exactly like S4/serve
+                if _leaf is not roll_leaf:
+                    roll_state = None
+                    roll_leaf = _leaf
+                batch_d = self._move_batch(batch)
+                out = self.model(
+                    chart=batch_d["chart"], numeric=batch_d["numeric"],
+                    context=batch_d["context"],
+                    macro_numeric=batch_d["macro_numeric"],
+                    history=roll_state,
+                )
+                roll_state = out.get("next_history") if self.model.memory is not None else None
+                losses = self.loss(out, batch_d)
+                self._adaptive_step(losses)
+                self._add_finetune_regularizers(losses, out, batch_d)
+                loss = losses["total"]
+                self.opt.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.model.parameters()) + list(self.loss.parameters()),
+                    cfg.grad_clip,
+                )
+                self.opt.step()
+                if self.sched is not None:
+                    self.sched.step()
+                self._step += 1
+                batch_n = batch_d["chart"].size(0)
+                for name, value in losses.items():
+                    ep_sums[name] = ep_sums.get(name, 0.0) + float(value.item()) * batch_n
+                ep_count += batch_n
+                if (self._step + 1) % max(1, cfg.log_every) == 0:
+                    avg = ep_sums.get("total", 0.0) / max(1, ep_count)
+                    lr = max(group["lr"] for group in self.opt.param_groups)
+                    logger.info(
+                        "seq epoch=%d step=%d loss=%.5f lr=%.2e elapsed=%.1fs",
+                        epoch, self._step, avg, lr, timer.elapsed,
+                    )
+            if ep_count == 0:
+                raise RuntimeError("S2(seq) training produced no batches")
+            averages = {name: value / ep_count for name, value in ep_sums.items()}
+            timer.stop()
+            record = {
+                "epoch": epoch,
+                "loss": averages["total"],
+                "elapsed_s": timer.elapsed,
+                "encoder_trainable": encoder_trainable,
+                "components": {k: v for k, v in averages.items() if k != "total"},
+                "mode": "sequential_memory",
+            }
+            if self.loss.log_vars is not None:
+                record["eff_weights"] = {
+                    k: round(float(v), 4)
+                    for k, v in self.loss.effective_weights().items()
+                }
+            if val_ds is not None and cfg.eval_every and (epoch + 1) % cfg.eval_every == 0:
+                val_metrics = self.evaluate(val_ds)
+                record["val"] = val_metrics
+                if cfg.eval_warm:
+                    record["val_warm"] = self._evaluate_memory(val_ds)
+            self._completed_epochs = epoch + 1
+            self._history.append(record)
+            val_metrics = record.get("val", {})
+            val_total = float(val_metrics.get("total", float("inf")))
+            val_champion = float(val_metrics.get(cfg.champion_metric, val_total))
+            improved = self._is_better(val_champion, self._best_val_metric)
+            if math.isfinite(val_champion):
+                delta = (
+                    val_champion - self._best_val_metric
+                    if cfg.champion_mode == "max"
+                    else self._best_val_metric - val_champion
+                )
+                if delta > cfg.early_stopping_min_delta:
+                    self._early_stopping_bad_epochs = 0
+                else:
+                    self._early_stopping_bad_epochs += 1
+            if improved:
+                self._best_val_metric = val_champion
+                self._best_val_total = val_total
+                if cfg.best_checkpoint:
+                    self.save(cfg.best_checkpoint)
+            if cfg.checkpoint:
+                self.save(cfg.checkpoint)
+            if (
+                cfg.early_stopping_patience > 0
+                and self._completed_epochs >= max(0, int(cfg.early_stopping_min_epochs))
+                and self._early_stopping_bad_epochs >= cfg.early_stopping_patience
+            ):
+                logger.info("S2(seq) early stopping after epoch %d", epoch)
+                break
+        self._set_encoder_trainable(True)
+        return {"history": list(self._history), "final_step": self._step}
+
+    @torch.no_grad()
+    def _evaluate_memory(self, ds) -> dict:
+        """Warm-contract evaluation: rolling history + memory sensitivity.
+
+        Iterates each symbol-segment in time order (causal), feeds the model
+        its real rolling history exactly like S4/serve, and also reports how
+        much the memory actually uses the history (1 - cos cold vs warm).
+        """
+        cfg = self.cfg
+        self.model.eval()
+        agg: dict[str, float] = {}
+        n = 0
+        direction_correct = 0
+        direction_total = 0
+        sens_values: list[float] = []
+        total_batches = 0
+        leaves = list(ds.datasets) if isinstance(ds, ConcatDataset) else [ds]
+        per_leaf_budget = max(
+            1, cfg.val_max_batches // max(1, len(leaves))
+        ) if cfg.val_max_batches > 0 else 64
+        for leaf in leaves:
+            state = None
+            batch_count = 0
+            for start in range(0, len(leaf), cfg.batch_size):
+                indices = list(range(start, min(start + cfg.batch_size, len(leaf))))
+                if len(indices) < 2:
+                    continue
+                batch = multimodal_collate([leaf[i] for i in indices])
+                batch_d = self._move_batch(batch)
+                out = self.model(
+                    chart=batch_d["chart"], numeric=batch_d["numeric"],
+                    context=batch_d["context"], macro_numeric=batch_d["macro_numeric"],
+                    history=state,
+                )
+                state = out.get("next_history")
+                losses = self.loss(out, batch_d)
+                for k, v in losses.items():
+                    agg[k] = agg.get(k, 0.0) + float(v.item()) * batch_d["chart"].size(0)
+                direction_target = torch.where(
+                    batch_d["label_dir"] == -1,
+                    torch.zeros_like(batch_d["label_dir"]),
+                    batch_d["label_dir"] + 1,
+                )
+                direction_correct += int((out["direction"].argmax(-1) == direction_target).sum())
+                direction_total += int(direction_target.numel())
+                n += int(batch_d["chart"].size(0))
+                # memory sensitivity: cold vs warm embeddings on the same batch
+                if cfg.memory_sensitivity_log and len(sens_values) < 8 and batch_count >= 3:
+                    cold = self.model(
+                        chart=batch_d["chart"], numeric=batch_d["numeric"],
+                        context=batch_d["context"], macro_numeric=batch_d["macro_numeric"],
+                        history=None,
+                    )["embedding"]
+                    cos = torch.nn.functional.cosine_similarity(
+                        cold, out["embedding"], dim=-1
+                    )
+                    sens_values.append(float((1.0 - cos.mean()).item()))
+                batch_count += 1
+                total_batches += 1
+                if per_leaf_budget > 0 and batch_count >= per_leaf_budget:
+                    break
+        metrics = {k: round(v / max(1, n), 5) for k, v in agg.items()}
+        metrics["n_samples"] = int(n)
+        metrics["direction_balanced_acc"] = round(
+            direction_correct / max(1, direction_total), 4
+        )
+        metrics["memory_sensitivity"] = round(float(np.mean(sens_values)), 5) if sens_values else 0.0
+        metrics["total_batches"] = int(total_batches)
+        return metrics
 
     def _is_better(self, value: float, best: float) -> bool:
         if not math.isfinite(value):

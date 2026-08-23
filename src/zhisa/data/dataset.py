@@ -592,7 +592,7 @@ class MarketDataset(Dataset):
         return self._features_df.iloc[start:end].to_numpy(dtype=np.float32)
 
     def _history_window(self, t: int, end: int) -> np.ndarray:
-        hist_start = max(0, t - 256)
+        hist_start = max(0, t - int(self.normalization.lookback))
         if self._features_arr is not None:
             return self._features_arr[hist_start:end]
         return self._features_df.iloc[hist_start:end].to_numpy(dtype=np.float32)
@@ -618,7 +618,7 @@ class MarketDataset(Dataset):
         start = max(0, idx - window + 1)
         end = idx + 1
         raw = features[start:end]
-        hist_start = max(0, idx - 256)
+        hist_start = max(0, idx - int(self.normalization.lookback))
         history = features[hist_start:end]
         normalized = normalize_feature_window(raw, history)
         if normalized.shape[0] < window:

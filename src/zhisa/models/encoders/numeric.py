@@ -63,8 +63,11 @@ class NumericEncoder(nn.Module):
         if cfg.causal and cfg.summary_position != "end":
             raise ValueError("causal numeric encoder requires summary_position='end'")
         self.n_patches = cfg.window // cfg.patch_size
-        # In causal mode the summary (readout) lives AFTER the patch stream.
-        self.summary_idx = self.n_patches if cfg.causal else 0
+        # The summary (readout) token sits AFTER the patch stream when
+        # ``summary_position == "end"`` (causal mode requires it), otherwise it
+        # is the FIRST token. ``summary_position`` is the source of truth; the
+        # ``causal`` flag only selects the attention mask.
+        self.summary_idx = self.n_patches if cfg.summary_position == "end" else 0
         self.patch_proj = nn.Linear(cfg.in_features * cfg.patch_size, cfg.d_model)
         self.pos = _SinPositionalEmbedding(cfg.d_model, max_len=self.n_patches + 1)
         self.cls = nn.Parameter(torch.zeros(1, 1, cfg.d_model))

@@ -135,7 +135,13 @@ def run_backtest(
 
     timestamps = None
     if isinstance(df.index, pd.DatetimeIndex):
-        timestamps = df.index[: len(equity_arr)].to_numpy()
+        # The env starts at bar ``env._t_start`` (the feature window): bars
+        # before it were consumed as history. Indexing timestamps from 0
+        # would shift every date ~window bars into the past (days of error
+        # on 1h data). Align explicitly, bounds-guarded.
+        start = int(getattr(env, "_t_start", 0))
+        end = min(start + len(equity_arr), len(df))
+        timestamps = df.index[start:end].to_numpy()
 
     m = compute_metrics(equity_arr, trade_returns=trade_returns)
     return BacktestResult(

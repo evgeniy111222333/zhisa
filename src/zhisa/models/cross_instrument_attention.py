@@ -43,6 +43,13 @@ class CrossInstrumentConfig:
     feedforward_mult: int = 4
     norm_first: bool = True
     field_overrides: dict = field(default_factory=dict)
+    # Additive attention bias (e.g. a cross-asset correlation matrix).
+    # When enabled the module's forward accepts ``bias`` of shape
+    # (B, N, N) that is added to the scaled scores BEFORE softmax —
+    # the direct "graph" pathway connecting cross_asset statistics to
+    # cross-instrument attention (#4 proposal). Default disabled.
+    use_attention_bias: bool = False
+    bias_gate: float = 1.0  # lambda scaling of the additive bias
 
     def __post_init__(self) -> None:
         if self.depth < 0:
@@ -119,6 +126,7 @@ class CrossInstrumentAttention(nn.Module):
         self,
         x: torch.Tensor,                       # (B, N, D)
         portfolio: Optional[torch.Tensor] = None,  # (B, portfolio_dim)
+        bias: Optional[torch.Tensor] = None,   # (B, N, N) additive score bias
     ) -> torch.Tensor:
         if x.dim() != 3:
             raise ValueError(f"expected (B, N, D) input, got {tuple(x.shape)}")
@@ -128,10 +136,70 @@ class CrossInstrumentAttention(nn.Module):
             )
         y = self._add_instrument_id(x)
         if self.layers is not None:
-            y = self.layers(y)
+            if self.cfg.use_attention_bias:
+                if bias is None:
+                    raise ValueError("use_attention_bias=True requires a bias tensor")
+                y = self._biased_stack(y, bias)
+            else:
+                y = self.layers(y)
         if portfolio is not None and self.portfolio_proj is not None:
             y = y + self.portfolio_proj(portfolio).unsqueeze(1)
         return y
+
+    def _biased_stack(self, x: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        """Full encoder-depth forward with additive attention bias.
+
+        Replicates each TransformerEncoderLayer exactly (attention + FFN +
+        norms, norm_first ordering) except that every attention block receives
+        the additive ``bias`` in its scores. With ``bias_gate=0`` the output
+        is bit-identical to the unbiased :attr:`layers` path.
+        """
+        if bias.shape[:2] != x.shape[:2] or bias.shape[2] != x.shape[1]:
+            raise ValueError(
+                f"bias must be (B, N, N), got {tuple(bias.shape)} vs x {tuple(x.shape)}"
+            )
+        gate = self.cfg.bias_gate
+        for layer in self.layers.layers:
+            if layer.norm_first:
+                _x = layer.norm1(x)
+                attn_out = self._mha(layer, _x, _x, _x, bias, gate)
+                x = x + self._pw_drop(layer.dropout1, attn_out)
+                _x2 = layer.norm2(x)
+                ff_out = layer.linear2(layer.activation(layer.linear1(_x2)))
+                x = x + self._pw_drop(layer.dropout2, ff_out)
+            else:
+                attn_out = self._mha(layer, x, x, x, bias, gate)
+                x = layer.norm1(x + self._pw_drop(layer.dropout1, attn_out))
+                ff_out = layer.linear2(layer.activation(layer.linear1(x)))
+                x = layer.norm2(x + self._pw_drop(layer.dropout2, ff_out))
+        return x
+
+    @staticmethod
+    def _pw_drop(dropout, t: torch.Tensor) -> torch.Tensor:
+        if dropout is None or dropout.p == 0.0 or not dropout.training:
+            return t
+        return dropout(t)
+
+    def _mha(self, layer, q, k, v, bias: torch.Tensor, gate: float) -> torch.Tensor:
+        """Replicate nn.MultiheadAttention forward with an additive bias."""
+        mha = layer.self_attn
+        W, bq = mha.in_proj_weight, mha.in_proj_bias
+        D = q.size(-1)
+        H = mha.num_heads
+        hd = D // H
+        B, N, _ = q.shape
+        qf = q.reshape(B * N, D)
+        qq = (qf @ W[:D].T + bq[:D]).reshape(B, N, H, hd).permute(0, 2, 1, 3)
+        kk = (qf @ W[D:2 * D].T + bq[D:2 * D]).reshape(B, N, H, hd).permute(0, 2, 1, 3)
+        vv = (qf @ W[2 * D:].T + bq[2 * D:]).reshape(B, N, H, hd).permute(0, 2, 1, 3)
+        scores = (qq @ kk.transpose(-1, -2)) / (hd ** 0.5)
+        if gate != 0.0:
+            scores = scores + gate * bias.unsqueeze(1)
+        attn = torch.softmax(scores, dim=-1)
+        if mha.training and getattr(mha, "dropout", 0.0) > 0.0:
+            attn = torch.nn.functional.dropout(attn, p=float(mha.dropout), training=True)
+        out = (attn @ vv).permute(0, 2, 1, 3).reshape(B, N, D)
+        return mha.out_proj(out)
 
 
 __all__ = ["CrossInstrumentAttention", "CrossInstrumentConfig"]

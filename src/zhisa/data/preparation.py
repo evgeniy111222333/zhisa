@@ -133,6 +133,15 @@ class PrepareConfig:
     with_cross_asset: bool = False
     cross_asset_windows: tuple = (64, 256)
     with_volume_ratios: bool = False
+    cross_asset_breadth: bool = True
+    cross_asset_regime_betas: bool = False
+    cross_asset_stress_z: float = 2.0
+    cross_asset_max_beta_clip: float = 6.0
+    cross_asset_min_coverage: float = 0.5
+    # v4 add-ons (additive, opt-in, contract-preserving)
+    cross_asset_resid_alpha: bool = False
+    cross_asset_vol_index: bool = False
+    cross_asset_lead_lag_lags: tuple = ()
 
     def __post_init__(self) -> None:
         self.tsdb_root = Path(self.tsdb_root)
@@ -495,6 +504,14 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
         aligned, cross_audit = enrich_market_frames_detailed(
             aligned, windows=cfg.cross_asset_windows,
             with_volume_ratios=cfg.with_volume_ratios,
+            with_breadth=cfg.cross_asset_breadth,
+            with_regime_betas=cfg.cross_asset_regime_betas,
+            stress_z=cfg.cross_asset_stress_z,
+            max_beta_clip=cfg.cross_asset_max_beta_clip,
+            min_coverage=cfg.cross_asset_min_coverage,
+            with_resid_alpha=cfg.cross_asset_resid_alpha,
+            with_vol_index=cfg.cross_asset_vol_index,
+            lead_lag_lags=cfg.cross_asset_lead_lag_lags,
         )
         audit_dir = cfg.out_root / "audit" / "cross_asset_index"
         audit_dir.mkdir(parents=True, exist_ok=True)
@@ -506,9 +523,14 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
         log["stages"]["cross_asset_enrich"] = {
             "windows": list(cfg.cross_asset_windows),
             "with_volume_ratios": bool(cfg.with_volume_ratios),
+            "with_regime_betas": bool(cfg.cross_asset_regime_betas),
             "columns_added": [f"rel_logret_1",
                               *(f"beta_{w}" for w in cfg.cross_asset_windows),
-                              *(f"corr_{w}" for w in cfg.cross_asset_windows)],
+                              *(f"corr_{w}" for w in cfg.cross_asset_windows),
+                              *(f"market_vol_{w}" for w in cfg.cross_asset_windows),
+                              *(f"breadth_{w}" for w in cfg.cross_asset_windows if cfg.cross_asset_breadth),
+                              *(f"beta_{d}_{w}" for d in ("up", "down") for w in cfg.cross_asset_windows if cfg.cross_asset_regime_betas),
+                              *(f"corr_stress_{w}" for w in cfg.cross_asset_windows if cfg.cross_asset_regime_betas)],
             "per_symbol": audit_summary,
         }
     with_ctx, ctx_info = _merge_context(aligned, cfg)
@@ -582,6 +604,18 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
     with open(cfg.out_root / "preparation_log.json", "w", encoding="utf-8") as f:
         json.dump(log, f, indent=2, default=str)
 
+    # Lineage guard: record the scan so later reads can SCREAM on drift.
+    from zhisa.data.lineage import scan_prepared, write_lineage
+    try:
+        scan = scan_prepared(
+            cfg.out_root,
+            tsdb_root=cfg.tsdb_root,
+            symbols=list(with_ctx.keys()),
+        )
+        write_lineage(cfg.out_root, scan)
+    except Exception as exc:  # defensive: lineage is an audit trail, not a blocker
+        log["lineage_warning"] = f"lineage scan failed: {exc!r}"
+
     logger.info(
         "prepared dataset: %d symbols, %d rows total, manifest=%s",
         len(with_ctx), manifest.rows_total, manifest.output_checksum,
@@ -607,3 +641,132 @@ def load_prepared_split(out_root: Path, split: str) -> pd.DataFrame:
     if not p.exists():
         raise FileNotFoundError(p)
     return pd.read_parquet(p)
+
+
+def enrich_prepared_root(
+    base_root,
+    out_root,
+    *,
+    symbols=None,
+    windows=(64, 256),
+    with_volume_ratios=False,
+    with_breadth=False,
+    with_regime_betas=False,
+    stress_z=1.0,
+    max_beta_clip=6.0,
+    min_coverage=0.5,
+    with_resid_alpha=False,
+    with_vol_index=False,
+    lead_lag_lags=(),
+) -> dict:
+    """Build an enriched dataset ON TOP of an existing prepared root.
+
+    The cardinal rule: OHLCV rows are copied BYTE-IDENTICAL (no repair, no
+    reindex, no gap fill) and only new columns (cross-asset / regime /
+    breadth) are added. This is what makes the chart-store of the base root
+    reusable for the enriched root — the chart content hash only depends on
+    OHLCV.
+
+    Raises ``ValueError`` if any symbol's OHLCV differs from the base root.
+    """
+    base_root = Path(base_root)
+    out_root = Path(out_root)
+    bm_path = base_root / "manifest.json"
+    if not bm_path.is_file():
+        raise ValueError(f"base root has no manifest: {bm_path}")
+    base_manifest = json.loads(bm_path.read_text(encoding="utf-8"))
+    bsymbols = list(base_manifest.get("rows_per_symbol", {}).keys())
+    syms = symbols or bsymbols
+    missing = [s for s in syms if not (base_root / "symbols" / f"{s}.parquet").is_file()]
+    if missing:
+        raise ValueError(f"base root missing symbols: {missing}")
+
+    frames = {}
+    for sym in syms:
+        df = pd.read_parquet(base_root / "symbols" / f"{sym}.parquet").sort_index()
+        frames[sym] = df
+
+    from zhisa.data.cross_asset import enrich_market_frames_detailed
+
+    enriched, audit = enrich_market_frames_detailed(
+        frames, windows=windows, with_volume_ratios=with_volume_ratios,
+        with_breadth=with_breadth, with_regime_betas=with_regime_betas,
+        stress_z=stress_z, max_beta_clip=max_beta_clip, min_coverage=min_coverage,
+        with_resid_alpha=with_resid_alpha,
+        with_vol_index=with_vol_index,
+        lead_lag_lags=lead_lag_lags,
+    )
+    ohlcv_cols = ["open", "high", "low", "close", "volume"]
+    per_sym_rows = {}
+    feature_cols = list(base_manifest.get("feature_columns", []))
+    for sym in syms:
+        base = frames[sym][ohlcv_cols].to_numpy(dtype=np.float64)
+        new = enriched[sym][ohlcv_cols].to_numpy(dtype=np.float64)
+        if base.shape != new.shape or not np.array_equal(base, new):
+            raise ValueError(
+                f"enrich-from violated OHLCV byte-identity for {sym}: shape {base.shape} vs {new.shape}"
+            )
+        per_sym_rows[sym] = int(len(enriched[sym]))
+        feature_cols = list(enriched[sym].columns)
+    out_root.mkdir(parents=True, exist_ok=True)
+    (out_root / "symbols").mkdir(parents=True, exist_ok=True)
+    for sym in syms:
+        enriched[sym].to_parquet(out_root / "symbols" / f"{sym}.parquet")
+
+    (out_root / "splits").mkdir(parents=True, exist_ok=True)
+    split_meta = {}
+    for split in ("train", "val", "test"):
+        src = base_root / "splits" / f"{split}.parquet"
+        if not src.is_file():
+            continue
+        sdf = pd.read_parquet(src)
+        if "symbol" not in sdf.columns:
+            raise ValueError(f"base split {split} has no 'symbol' column")
+        parts = []
+        for sym, g in sdf.groupby("symbol", sort=False):
+            g_idx = pd.DatetimeIndex(g.index)
+            merged = enriched[sym].reindex(g_idx).copy()
+            merged["symbol"] = sym
+            parts.append(merged)
+        rebuilt = pd.concat(parts) if parts else sdf
+        rebuilt.to_parquet(out_root / "splits" / f"{split}.parquet")
+        split_meta[split] = int(len(rebuilt))
+
+    out_manifest = dict(base_manifest)
+    out_manifest["rows_per_symbol"] = per_sym_rows
+    out_manifest["rows_total"] = int(sum(per_sym_rows.values()))
+    out_manifest["feature_columns"] = sorted(feature_cols)
+    out_manifest["derived_from"] = {
+        "base_root": str(base_root),
+        "base_output_checksum": base_manifest.get("output_checksum"),
+        "ohclv_byte_identical": True,
+        "enrichment": {
+            "with_volume_ratios": bool(with_volume_ratios),
+            "with_breadth": bool(with_breadth),
+            "with_regime_betas": bool(with_regime_betas),
+            "stress_z": float(stress_z),
+            "max_beta_clip": float(max_beta_clip),
+            "min_coverage": float(min_coverage),
+        },
+    }
+    out_manifest["output_checksum"] = PreparedDataset.checksum_manifest(out_manifest)
+    (out_root / "manifest.json").write_text(json.dumps(out_manifest, indent=2), encoding="utf-8")
+
+    with open(out_root / "checksums.txt", "w", encoding="utf-8") as f:
+        f.write(f"manifest  {out_manifest['output_checksum']}\n")
+        f.write(f"base      {out_manifest['derived_from']['base_root']}  "
+                f"{base_manifest.get('output_checksum')}\n")
+
+    from zhisa.data.lineage import scan_prepared, write_lineage
+
+    scan = scan_prepared(out_root, tsdb_root=None, symbols=syms)
+    write_lineage(out_root, scan)
+
+    return {
+        "out_root": str(out_root),
+        "rows_total": out_manifest["rows_total"],
+        "output_checksum": out_manifest["output_checksum"],
+        "base_root": str(base_root),
+        "base_checksum": out_manifest["derived_from"]["base_output_checksum"],
+        "splits": split_meta,
+    }

@@ -96,6 +96,35 @@ def _build_argparser() -> argparse.ArgumentParser:
         "(requires --with-cross-asset).",
     )
     p.add_argument(
+        "--cross-asset-regime-betas", action="store_true", default=False,
+        help="v3.1: add regime-conditional columns (beta_up/beta_down, "
+        "corr_stress) + market_vol/dispersion/breadth (breadth always on "
+        "with --with-cross-asset).",
+    )
+    p.add_argument(
+        "--with-resid-alpha", action="store_true", default=False,
+        help="v4: add idiosyncratic residual alpha (R - beta*R_market) "
+        "columns resid_alpha_{64,256}.",
+    )
+    p.add_argument(
+        "--with-vol-index", action="store_true", default=False,
+        help="v4: add volume-weighted market index + rel/beta/corr_vw columns "
+        "(requires --with-volume-ratios).",
+    )
+    p.add_argument(
+        "--lead-lag-lags", type=str, default="",
+        help="v4: comma list of CAUSAL lead-lag lags (>=0, e.g. 0,1,2) — "
+        "adds leadlag_{ref}_{k} columns vs each reference symbol "
+        "(intended for 15m/5m; 1h measured ~0).",
+    )
+    p.add_argument(
+        "--enrich-from", type=Path, default=None,
+        help="Build this root as an ENRICHMENT of an existing prepared root: "
+        "OHLCV rows are copied byte-identical (no repair/reindex — the "
+        "chart-store of the base root stays reusable), only cross-asset "
+        "columns are added. Requires --with-cross-asset.",
+    )
+    p.add_argument(
         "--no-futures-context", dest="with_futures_context",
         action="store_false",
         help="Disable futures-context merge even when context files exist.",
@@ -191,6 +220,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         version=str(args.version),
         with_cross_asset=bool(args.with_cross_asset),
         with_volume_ratios=bool(args.with_volume_ratios),
+        cross_asset_breadth=bool(args.cross_asset_regime_betas),
+        cross_asset_regime_betas=bool(args.cross_asset_regime_betas),
+        cross_asset_resid_alpha=bool(args.with_resid_alpha),
+        cross_asset_vol_index=bool(args.with_vol_index),
+        cross_asset_lead_lag_lags=(
+            tuple(int(x) for x in args.lead_lag_lags.split(",") if x.strip())
+            if (args.lead_lag_lags or "").strip() else ()
+        ),
     )
 
     # Pretty-print the resolved config so a dry-run is informative.
@@ -215,6 +252,36 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.dry_run:
         print("dry-run: not writing any files.")
+        return 0
+
+    if args.enrich_from:
+        if not args.with_cross_asset:
+            print("error: --enrich-from requires --with-cross-asset",
+                  file=sys.stderr)
+            return 1
+        from zhisa.data.preparation import enrich_prepared_root
+
+        try:
+            summary = enrich_prepared_root(
+                args.enrich_from,
+                Path(args.out_root),
+                symbols=symbols,
+                windows=(64, 256),
+                with_volume_ratios=bool(args.with_volume_ratios),
+                with_breadth=bool(args.cross_asset_regime_betas),
+                with_regime_betas=bool(args.cross_asset_regime_betas),
+                with_resid_alpha=bool(args.with_resid_alpha),
+                with_vol_index=bool(args.with_vol_index),
+                lead_lag_lags=(
+                    tuple(int(x) for x in args.lead_lag_lags.split(",") if x.strip())
+                    if (args.lead_lag_lags or "").strip() else ()
+                ),
+            )
+        except Exception as exc:
+            logger.exception("enrich-from failed")
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"status": "ok", "enrich_from": summary}, indent=2))
         return 0
 
     try:

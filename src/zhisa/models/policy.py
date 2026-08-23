@@ -39,6 +39,16 @@ class PolicyConfig:
     use_macro_context: bool = False
     use_memory: bool = True
     memory_max_len: int = 64
+    # When True the working memory contributes a RESIDUAL correction instead
+    # of replacing the embedding (``z = z + memory(...)``). Without this the
+    # (mostly untrained) memory dominates the final vector — measured at
+    # cos(mem-out, encoder-z) ~ 0.20 on the v2-best checkpoint — and both S2
+    # and S4 eat a blind rotation. Residual keeps the encoder embedding
+    # primary and lets the memory only add what the history explains.
+    memory_residual: bool = True
+    # LayerNorm applied to the memory input stream (encoder z). History and
+    # current z get comparable scales before attention.
+    memory_input_norm: bool = True
     fusion_layers: int = 2
     memory_layers: int = 2
     numeric_layers: int = 2
@@ -140,6 +150,11 @@ class PolicyNetwork(nn.Module):
                 dim_ff=int(cfg.embed_dim * cfg.encoder_ff_mult),
             )) if cfg.use_memory else None
         )
+        self.memory_in_norm = nn.LayerNorm(cfg.embed_dim) if (cfg.use_memory and cfg.memory_input_norm) else None
+        # Learnable residual scale: starts near zero so the (untrained) memory
+        # cannot dominate the embedding (measured cos ~0.20 with the legacy
+        # hard replace); training grows it as the memory proves useful.
+        self.memory_scale = nn.Parameter(torch.zeros(1)) if (cfg.use_memory and cfg.memory_residual) else None
         self.heads = MultiTaskHeads(HeadsConfig(
             embed_dim=cfg.embed_dim, n_actions=cfg.n_actions,
             n_regime_classes=cfg.n_regime_classes,
@@ -261,7 +276,13 @@ class PolicyNetwork(nn.Module):
                 )
             z_with_hist = torch.cat([history, z.unsqueeze(1)], dim=1)
             out_seq = self.memory(z_with_hist)
-            z = out_seq[:, -1]
+            if self.cfg.memory_residual:
+                mem_delta = out_seq[:, -1]
+                if self.memory_in_norm is not None:
+                    mem_delta = self.memory_in_norm(mem_delta)
+                z = z + self.memory_scale * mem_delta
+            else:
+                z = out_seq[:, -1]
             next_history = z_with_hist[:, -max_hist_len:].detach()
         else:
             next_history = None

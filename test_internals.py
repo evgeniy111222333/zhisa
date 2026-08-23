@@ -6,8 +6,8 @@ from pathlib import Path
 
 from zhisa.env.trading_env import EnvConfig, TradingEnv
 from zhisa.scripts._real_data import load_market_dataframe
-from zhisa.models.policy import build_default_policy
-from zhisa.scripts.backtest import TorchModelPolicy, _checkpoint_policy_config
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
+from zhisa.scripts.backtest import TorchModelPolicy
 
 def main():
     print("=== ZHiSA Internal Backtest Diagnostics ===")
@@ -27,23 +27,14 @@ def main():
     
     ckpt_path = "artifacts/s4/model_btc_rl.pt"
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg = _checkpoint_policy_config(ckpt)
     
-    model = build_default_policy(
-        in_numeric_features=int(cfg.get("in_numeric_features", 32)),
-        in_context_features=int(cfg.get("in_context_features", 10)),
-        window=int(cfg.get("window", 32)),
-        image_size=int(cfg.get("image_size", EnvConfig.image_size)),
-        n_actions=int(cfg.get("n_actions", 9)),
-        n_regime_classes=int(cfg.get("n_regime_classes", 4)),
-    )
-    model.load_state_dict(ckpt["model"])
+    model = build_policy_from_checkpoint(ckpt)
     policy = TorchModelPolicy(model, device="cpu")
     print(f"[OK] Policy loaded successfully. Device: {policy.device}")
     
     os.environ["ZHISA_FAST_RENDER"] = "1"
     
-    env_cfg = EnvConfig(seed=0, window=int(cfg.get("window", 32)), image_size=int(cfg.get("image_size", 32)))
+    env_cfg = EnvConfig(seed=0, window=int(model.cfg.window), image_size=int(model.cfg.image_size))
     env = TradingEnv(df, cfg=env_cfg)
     
     obs, info = env.reset()

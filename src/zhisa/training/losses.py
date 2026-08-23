@@ -67,10 +67,12 @@ class MultiTaskLoss(nn.Module):
         volatility_corr_weight: float = 0.0,
         direction_multi_horizon_weights: Optional[torch.Tensor] = None,
         return_multi_horizon_weights: Optional[torch.Tensor] = None,
+        adaptive_clamp: float = 4.0,
     ) -> None:
         super().__init__()
         w = weights or LossWeights()
         self.label_smoothing = label_smoothing
+        self.learnable = bool(learnable)
         self.policy_focal_gamma = float(policy_focal_gamma)
         self.policy_direction_aux_weight = float(policy_direction_aux_weight)
         self.policy_size_aux_weight = float(policy_size_aux_weight)
@@ -120,7 +122,9 @@ class MultiTaskLoss(nn.Module):
         )
         if learnable:
             self.log_vars = nn.ParameterDict({
-                k: nn.Parameter(torch.zeros(1)) for k in (
+                # scalar (0-dim) parameters so ``total`` stays a 0-dim scalar
+                # (a (1,)-shaped lv would promote the loss to a 1D tensor)
+                k: nn.Parameter(torch.zeros(())) for k in (
                     "direction", "volatility", "regime", "return_pred",
                     "direction_multi", "return_multi", "risk", "policy", "value", "uncertainty",
                     "regime_playbook", "regime_playbook_prior", "regime_risk_budget",
@@ -132,32 +136,40 @@ class MultiTaskLoss(nn.Module):
                     "execution_slippage", "position_intent",
                 )
             })
+            # Kendall (2018) uncertainty weighting is risk-prone: a single
+            # task can collapse to zero weight or explode to dominate. Clamp
+            # the log-variance so the effective weight stays in
+            # [exp(-clamp), exp(+clamp)].
+            self.adaptive_clamp = float(adaptive_clamp)
         else:
             self.log_vars = None
-            self.register_buffer("_direction_w", torch.tensor(w.direction))
-            self.register_buffer("_direction_multi_w", torch.tensor(w.direction_multi))
-            self.register_buffer("_volatility_w", torch.tensor(w.volatility))
-            self.register_buffer("_regime_w", torch.tensor(w.regime))
-            self.register_buffer("_return_pred_w", torch.tensor(w.return_pred))
-            self.register_buffer("_return_multi_w", torch.tensor(w.return_multi))
-            self.register_buffer("_risk_w", torch.tensor(w.risk))
-            self.register_buffer("_policy_w", torch.tensor(w.policy))
-            self.register_buffer("_value_w", torch.tensor(w.value))
-            self.register_buffer("_uncertainty_w", torch.tensor(w.uncertainty))
-            self.register_buffer("_regime_playbook_w", torch.tensor(w.regime_playbook))
-            self.register_buffer("_regime_playbook_prior_w", torch.tensor(w.regime_playbook_prior))
-            self.register_buffer("_regime_risk_budget_w", torch.tensor(w.regime_risk_budget))
-            self.register_buffer("_regime_tradeability_w", torch.tensor(w.regime_tradeability))
-            self.register_buffer("_regime_transition_wait_w", torch.tensor(w.regime_transition_wait))
-            self.register_buffer("_regime_no_trade_w", torch.tensor(w.regime_no_trade))
-            self.register_buffer("_regime_size_multiplier_w", torch.tensor(w.regime_size_multiplier))
-            self.register_buffer("_regime_action_constraint_w", torch.tensor(w.regime_action_constraint))
-            self.register_buffer("_execution_order_type_w", torch.tensor(w.execution_order_type))
-            self.register_buffer("_execution_urgency_w", torch.tensor(w.execution_urgency))
-            self.register_buffer("_execution_reduce_only_w", torch.tensor(w.execution_reduce_only))
-            self.register_buffer("_execution_scale_in_w", torch.tensor(w.execution_scale_in))
-            self.register_buffer("_execution_slippage_w", torch.tensor(w.execution_slippage))
-            self.register_buffer("_position_intent_w", torch.tensor(w.position_intent))
+            self.adaptive_clamp = 0.0
+        # Prior buffers are registered in BOTH modes: fixed mode uses them
+        # directly, adaptive mode uses them as the hand-tuned base scale.
+        self.register_buffer("_direction_w", torch.tensor(w.direction))
+        self.register_buffer("_direction_multi_w", torch.tensor(w.direction_multi))
+        self.register_buffer("_volatility_w", torch.tensor(w.volatility))
+        self.register_buffer("_regime_w", torch.tensor(w.regime))
+        self.register_buffer("_return_pred_w", torch.tensor(w.return_pred))
+        self.register_buffer("_return_multi_w", torch.tensor(w.return_multi))
+        self.register_buffer("_risk_w", torch.tensor(w.risk))
+        self.register_buffer("_policy_w", torch.tensor(w.policy))
+        self.register_buffer("_value_w", torch.tensor(w.value))
+        self.register_buffer("_uncertainty_w", torch.tensor(w.uncertainty))
+        self.register_buffer("_regime_playbook_w", torch.tensor(w.regime_playbook))
+        self.register_buffer("_regime_playbook_prior_w", torch.tensor(w.regime_playbook_prior))
+        self.register_buffer("_regime_risk_budget_w", torch.tensor(w.regime_risk_budget))
+        self.register_buffer("_regime_tradeability_w", torch.tensor(w.regime_tradeability))
+        self.register_buffer("_regime_transition_wait_w", torch.tensor(w.regime_transition_wait))
+        self.register_buffer("_regime_no_trade_w", torch.tensor(w.regime_no_trade))
+        self.register_buffer("_regime_size_multiplier_w", torch.tensor(w.regime_size_multiplier))
+        self.register_buffer("_regime_action_constraint_w", torch.tensor(w.regime_action_constraint))
+        self.register_buffer("_execution_order_type_w", torch.tensor(w.execution_order_type))
+        self.register_buffer("_execution_urgency_w", torch.tensor(w.execution_urgency))
+        self.register_buffer("_execution_reduce_only_w", torch.tensor(w.execution_reduce_only))
+        self.register_buffer("_execution_scale_in_w", torch.tensor(w.execution_scale_in))
+        self.register_buffer("_execution_slippage_w", torch.tensor(w.execution_slippage))
+        self.register_buffer("_position_intent_w", torch.tensor(w.position_intent))
         self.weights = w
 
     def set_policy_class_weights(self, weights: Optional[torch.Tensor]) -> None:
@@ -174,10 +186,52 @@ class MultiTaskLoss(nn.Module):
             dtype=torch.float32,
         )
 
-    def _w(self, key: str) -> torch.Tensor:
-        if self.log_vars is not None:
-            return torch.exp(-self.log_vars[key])
+    def _prior(self, key: str) -> torch.Tensor:
+        """The fixed hand-tuned prior weight (always available)."""
         return getattr(self, f"_{key}_w")
+
+    def _eff(self, key: str) -> Optional[torch.Tensor]:
+        """Adaptive (Kendall) effective weight, clamped; None when fixed."""
+        if self.log_vars is not None:
+            lv = self.log_vars[key].clamp(min=-self.adaptive_clamp,
+                                          max=self.adaptive_clamp)
+            return torch.exp(-lv)
+        return None
+
+    def effective_weights(self) -> dict[str, float]:
+        """Current adaptive weights by task name (for logging/metrics)."""
+        if self.log_vars is None:
+            return {}
+        out = {}
+        for k in self.log_vars:
+            out[k] = float(self._eff(k).item())
+        return out
+
+    def seed_log_vars_from_losses(self, task_means: dict[str, float]) -> None:
+        """Initialise log-variance from measured raw loss scales.
+
+        log_var_k0 = ln(prior_k * mean(L_k)) so the effective weight starts
+        near the value the fixed weighting would imply — convergence in a
+        few epochs instead of a long equilibration.
+        """
+        if self.log_vars is None:
+            return
+        with torch.no_grad():
+            for k, mean in task_means.items():
+                if k not in self.log_vars:
+                    continue
+                prior = float(self._prior(k).item())
+                target = max(float(mean) * prior, 1e-9)
+                lv = float(torch.log(torch.tensor(target)))
+                lv = min(max(lv, -self.adaptive_clamp), self.adaptive_clamp)
+                self.log_vars[k].fill_(lv)
+
+    def set_log_vars_trainable(self, trainable: bool) -> None:
+        """Freeze/unfreeze the adaptive weights (warmup phase + sag tests)."""
+        if self.log_vars is None:
+            return
+        for p in self.log_vars.parameters():
+            p.requires_grad_(trainable)
 
     def forward(
         self,
@@ -520,6 +574,16 @@ class MultiTaskLoss(nn.Module):
             total_device = next(iter(outputs.values())).device
         total = torch.zeros((), device=total_device)
         for k, v in losses.items():
-            total = total + self._w(k) * v
+            prior = self._prior(k)
+            eff = self._eff(k)
+            if eff is not None:
+                # Kendall weighting on top of the hand-tuned prior: the
+                # effective contribution is prior * exp(-log_var) * L and we
+                # add the log_var regulariser (maps to the Shannon term).
+                lv = self.log_vars[k]
+                total = total + prior * eff * v + lv.clamp(min=-self.adaptive_clamp,
+                                                           max=self.adaptive_clamp)
+            else:
+                total = total + prior * v
         losses["total"] = total
         return losses

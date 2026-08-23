@@ -63,6 +63,24 @@ def is_supported(version: str) -> bool:
     return version in SUPPORTED_VERSIONS
 
 
+def _policy_identity(kind: str, cfg) -> str:
+    import json as _json
+
+    from zhisa.data.chart_store import frame_checksum
+
+    payload = sorted(cfg.__dict__.items())
+    raw = _json.dumps(payload, sort_keys=True).encode()
+    # include the repair-version string so future semantic bumps change identity
+    v = getattr(cfg, "repair_version", "none")
+    return f"{kind}:{v}:{frame_checksum_from_bytes(raw)}"
+
+
+def frame_checksum_from_bytes(raw: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(raw).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Gap policy
 # ---------------------------------------------------------------------------
@@ -92,6 +110,15 @@ class GapPolicy:
     max_ffill_bars: int = 4
     drop_long_gaps: bool = True
     require_monotonic: bool = True
+    # Version of the repair semantics. BUMP this (and the hash below) whenever
+    # the repair/reindex logic changes: prepared roots built under different
+    # repair versions are NOT bit-comparable and MUST NOT share chart stores.
+    # Recorded in the manifest so clients can scream on mismatch.
+    repair_version: str = "repair-v1"
+
+    def identity(self) -> str:
+        """Content-addressable identity of this policy."""
+        return _policy_identity("gap", self)
 
 
 # ---------------------------------------------------------------------------

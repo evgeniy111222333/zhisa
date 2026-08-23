@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import math
 import os
 
 import torch
@@ -108,6 +109,35 @@ class SSLConfig:
     use_masked_modeling: bool = True
     use_temporal_contrast: bool = True
     use_cross_modal: bool = True
+    # Weight of the TRUNK-level alignment term (cos similarity on raw
+    # vision-pooled vs numeric-CLS embeddings, NO projections). Projection
+    # heads can satisfy the proj-space InfoNCE alone (measured: proj-cos
+    # ~0.95 while trunk-cos stays negative); this term forces the trunk
+    # itself to align. 0.0 disables (canonical behaviour).
+    weight_trunk_align: float = 0.0
+    trunk_align_momentum: float = 0.0  # >0: soft target from EMA of numeric CLS
+    # Instrument-embedding spread: penalises the mean off-diagonal cosine of
+    # ``context.instrument_emb`` so symbols stop colliding (measured pairs
+    # at 0.44-0.56 with silhouette 0.007). 0.0 disables.
+    instrument_contrast_w: float = 0.0
+    # ---- Temporal CPC v2 (negatives engineering, all train-only). ----
+    # MoCo-style memory bank of L2-normalised teacher target projections.
+    # 0 disables the bank (canonical v1 behaviour: in-batch negatives only).
+    temporal_bank_size: int = 0
+    # Steps before the bank is consulted (avoids a near-empty queue).
+    temporal_bank_warmup: int = 128
+    # Hard-negative offsets in units of temporal_horizon, sampled from the
+    # SAME instrument, e.g. (-1, 2) => windows at t-h and t+2h. Empty
+    # tuple disables hard negatives. Costs one extra teacher forward
+    # (2B windows concatenated into a single call).
+    temporal_hard_offsets: tuple = ()
+    # ---- LR schedule. "constant" reproduces the canonical v1 behaviour
+    # (linear warmup then fixed lr). "cosine" decays to
+    # ``cosine_min_scale * lr`` over ``total_steps`` (auto-estimated from
+    # epochs x steps-per-epoch when total_steps == 0).
+    lr_schedule: str = "constant"
+    cosine_min_scale: float = 0.003
+    total_steps: int = 0
 
 
 class TemporalPairDataset(Dataset):
@@ -115,6 +145,11 @@ class TemporalPairDataset(Dataset):
 
     A ``ConcatDataset`` is handled component-by-component so a pair can never
     cross from the end of one instrument into the start of another.
+
+    Every returned item is stamped with a global id ``meta["gid"] =
+    (leaf_index, local_index)`` so the contrastive loss can (a) build a
+    deduplicated memory bank and (b) sample same-instrument hard negatives
+    at arbitrary step offsets (see :meth:`offset_item`).
     """
 
     def __init__(self, dataset: Dataset, horizon: int = 1) -> None:
@@ -134,6 +169,24 @@ class TemporalPairDataset(Dataset):
     def __len__(self) -> int:
         return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
 
+    def _stamp(self, dataset_idx: int, local_idx: int, horizon_shift: int = 0):
+        """Fetch ``dataset[local_idx + shift]`` with a global id stamped.
+
+        Items are expected to be dicts (MarketDataset contract); any other
+        item type (legacy tuple-based fakes) is passed through untouched so
+        old callers keep their behaviour.
+        """
+        ds = self.datasets[dataset_idx]
+        idx = local_idx + horizon_shift
+        item = ds[idx]
+        if not isinstance(item, dict):
+            return item
+        item = dict(item)
+        meta = dict(item.get("meta", {}) or {})
+        meta["gid"] = (int(dataset_idx), int(idx))
+        item["meta"] = meta
+        return item
+
     def __getitem__(self, index: int):
         if index < 0:
             index += len(self)
@@ -142,14 +195,30 @@ class TemporalPairDataset(Dataset):
         dataset_idx = bisect_right(self.cumulative_sizes, index)
         previous = self.cumulative_sizes[dataset_idx - 1] if dataset_idx > 0 else 0
         local_idx = index - previous
-        dataset = self.datasets[dataset_idx]
-        return dataset[local_idx], dataset[local_idx + self.horizon]
+        current = self._stamp(dataset_idx, local_idx, 0)
+        future = self._stamp(dataset_idx, local_idx, self.horizon)
+        return current, future
+
+    def offset_item(self, dataset_idx: int, local_idx: int, step_offset: int):
+        """Same-instrument shifted window for hard negatives, or None.
+
+        ``step_offset`` is in raw sample steps (NOT horizon units); the caller
+        multiplies by ``horizon``. Bounds-checked per leaf; deterministic —
+        it depends only on ``(dataset_idx, local_idx, step_offset)``.
+        """
+        ds = self.datasets[dataset_idx]
+        idx = local_idx + step_offset
+        if idx < 0 or idx >= len(ds):
+            return None
+        return self._stamp(dataset_idx, idx, 0)
 
 
 def temporal_pair_collate(batch) -> dict:
     current, future = zip(*batch)
     current_batch = multimodal_collate(current)
     future_batch = multimodal_collate(future)
+    gids = [it["meta"].get("gid") for it in current]
+    future_gids = [it["meta"].get("gid") for it in future]
     return {
         "chart": current_batch.chart,
         "numeric": current_batch.numeric,
@@ -158,6 +227,8 @@ def temporal_pair_collate(batch) -> dict:
         "future_chart": future_batch.chart,
         "future_numeric": future_batch.numeric,
         "future_context": future_batch.context,
+        "gids": gids,
+        "future_gids": future_gids,
     }
 
 
@@ -247,19 +318,44 @@ def info_nce(
     positive: torch.Tensor,
     temperature: float = 0.1,
     max_logit: float = 50.0,
+    extra_negatives: Optional[torch.Tensor] = None,
+    row_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Symmetric InfoNCE between two L2-normalised projection batches.
+    """InfoNCE between two L2-normalised projection batches.
 
     Both ``anchor`` and ``positive`` are expected to be shape ``(B, D)``.
     The positive pair is the diagonal ``(i, i)``; all other entries
-    are negatives. The logits are clamped to ``[-max_logit, max_logit]``
-    to keep cross-entropy numerically stable when the projection
-    head has not yet been warmed up.
+    are negatives. ``extra_negatives`` may be shape ``(B, K, D)`` (or
+    ``(B*K, D)``) — additional rows concatenated after the positive
+    block (memory-bank queue and/or hard negatives). ``row_mask``, when
+    given, is a boolean tensor ``(B, B + n_extra_rows)`` marking rows to
+    EXCLUDE (logits set to a large negative so the row cannot win). The
+    diagonal positive row is never excluded (callers must leave it
+    unmasked). The logits are clamped to ``[-max_logit, max_logit]``
+    to keep cross-entropy numerically stable when the projection head
+    has not yet been warmed up.
     """
     a = F.normalize(anchor, dim=-1)
     p = F.normalize(positive, dim=-1)
-    logits = a @ p.t() / max(temperature, 1e-6)
+    blocks = [p]
+    if extra_negatives is not None:
+        if extra_negatives.dim() == 3:
+            extra_negatives = extra_negatives.reshape(-1, extra_negatives.size(-1))
+        blocks.append(F.normalize(extra_negatives, dim=-1))
+    neg = torch.cat(blocks, dim=0)
+    logits = a @ neg.t() / max(temperature, 1e-6)
     logits = logits.clamp(min=-max_logit, max=max_logit)
+    if row_mask is not None:
+        if row_mask.dtype != torch.bool:
+            row_mask = row_mask.bool()
+        # Never mask the diagonal (the positive row itself): the mask built
+        # by callers exempts it by construction, but we enforce it here as
+        # defence-in-depth (a fully-masked row would produce a NaN CE).
+        # The diagonal lives in the FIRST B columns (positive block).
+        diag = torch.zeros_like(row_mask)
+        diag[:, :a.size(0)] = torch.eye(a.size(0), dtype=torch.bool, device=a.device)
+        row_mask = row_mask & ~diag
+        logits = logits.masked_fill(row_mask, -1e9)
     labels = torch.arange(a.size(0), device=a.device)
     return F.cross_entropy(logits, labels)
 
@@ -302,9 +398,16 @@ def masked_numeric_loss(
 
     # Predict original patch values at all positions.
     pred = reconstructor(tokens)  # (B, 1+n_patches, patch*F)
-    # Drop the summary slot: in causal mode the summary is the LAST token,
-    # otherwise it is the FIRST (CLS). Patches are everything in between.
-    if getattr(cfg, "causal", False):
+    # Drop the summary slot. Its position is governed by
+    # ``NumericEncoderConfig.summary_position`` ("end" = LAST token when the
+    # encoder is causal, otherwise "front" = FIRST/CLS). Branching on the raw
+    # ``causal`` flag is fragile: the encoder may legally use summary_position
+    # "end" with causal=False, which would slice the wrong slot.
+    summary_end = (
+        getattr(cfg, "summary_position", None) == "end"
+        or getattr(cfg, "causal", False)
+    )
+    if summary_end:
         pred_patches = pred[:, :n_patches, :]
     else:
         pred_patches = pred[:, 1:, :]
@@ -405,6 +508,174 @@ class SSLPretrainer:
                 noise_std=float(self.cfg.augment_noise_std),
             )
 
+        # ---- Temporal CPC v2 state ------------------------------------
+        # Memory bank (MoCo-style queue) of L2-normalised teacher target
+        # projections + the global ids of the samples that produced them,
+        # so the contrastive loss can exclude exact duplicates by id.
+        self._bank: Optional[torch.Tensor] = None
+        self._bank_gids: list = []
+        if self.cfg.temporal_bank_size > 0:
+            cap = int(self.cfg.temporal_bank_size)
+            self._bank = torch.zeros(0, self.cfg.projection_dim, device=self.device)
+            self._bank_capacity = cap
+        # Active TemporalPairDataset for hard-negative sampling (set by
+        # ``_loader``; sampled deterministically per (epoch, step, index)).
+        self._pair_source: Optional[TemporalPairDataset] = None
+        # Total optimisation steps for the cosine schedule; auto-estimated
+        # at fit() start when cfg.total_steps == 0.
+        self._estimated_total_steps: int = 0
+        # Anchor for the LR schedule: the step where THIS run started
+        # (0 for a cold start; the restored step after a resume). Keeps a
+        # cosine decay from consuming the previous run's budget on resume.
+        self._resume_step: int = 0
+
+    # ------------------------------------------------------------------
+    # Temporal CPC v2: memory bank + hard negatives
+    # ------------------------------------------------------------------
+
+    def _temporal_hard_negatives(self, batch: dict) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Same-instrument shifted-window negatives (train only).
+
+        For each anchor ``(leaf, local)`` encode the windows at
+        ``local + off*h`` (``off`` in :attr:`SSLConfig.temporal_hard_offsets`,
+        h = temporal_horizon) with the EMA teacher, in ONE concatenated
+        forward. Returns ``(rows (B*K, proj_dim), mask (B, B*K))`` or
+        ``(None, None)`` when disabled or no shift is valid. Rows that
+        could not be produced (out-of-bounds) are zero-padded and masked
+        out; the only *unmasked* rows are valid shifted windows whose
+        global id differs from the anchor's own positive.
+        """
+        offsets = tuple(int(o) for o in (self.cfg.temporal_hard_offsets or ()))
+        if not offsets or self._pair_source is None:
+            return None, None
+        h = int(self.cfg.temporal_horizon)
+        B = int(batch["chart"].size(0))
+        future_gids = batch.get("future_gids") or [None] * B
+        chart_rows: list = []
+        numeric_rows: list = []
+        context_rows: list = []
+        row_gids: list = []
+        populated: list = []  # anchors (in batch order) that produced rows
+        for i in range(B):
+            gid = future_gids[i]
+            if gid is None:
+                continue
+            leaf, local = gid
+            c_rows, n_rows, x_rows, g_rows = [], [], [], []
+            for off in offsets:
+                item = self._pair_source.offset_item(leaf, local, off * h)
+                if item is None:
+                    continue
+                c_rows.append(item["chart"].to(self.device, non_blocking=True))
+                n_rows.append(item["numeric"].to(self.device, non_blocking=True))
+                x_rows.append(item["context"].to(self.device, non_blocking=True))
+                g_rows.append(item["meta"]["gid"])
+            if not c_rows:
+                continue
+            chart_rows.append(c_rows)
+            numeric_rows.append(n_rows)
+            context_rows.append(x_rows)
+            row_gids.append(g_rows)
+            populated.append(i)
+        if not chart_rows:
+            return None, None
+        K = max(len(r) for r in row_gids)
+        ld = self.device
+
+        def _pad(lst: list, dtype: torch.dtype, shape: tuple) -> torch.Tensor:
+            out = torch.zeros(B, K, *shape, dtype=dtype, device=ld)
+            for pos, rows in enumerate(lst):
+                a = populated[pos]  # original batch anchor slot
+                for j, t in enumerate(rows):
+                    out[a, j] = t
+            return out
+
+        c_shape = chart_rows[0][0].shape
+        n_shape = numeric_rows[0][0].shape
+        x_shape = context_rows[0][0].shape
+        chart = _pad(chart_rows, torch.float32, c_shape)
+        numeric = _pad(numeric_rows, torch.float32, n_shape)
+        context = _pad(context_rows, torch.float32, x_shape)
+        # Instrument ids per hard row, aligned with the (B, K) layout above:
+        # rows live at slot ``anchor*K + j``; anchors without valid offsets
+        # keep zero-id rows (they are masked out of the logits anyway).
+        # NOTE: the instrument id comes from the BATCH tensor, NOT from the
+        # leaf index — a dataset may contain many segments per instrument
+        # (leaf idx can exceed n_instruments and embedding would OOR).
+        batch_inst = batch.get("instrument_id")
+        if batch_inst is None:
+            return None, None
+        inst = torch.zeros(B * K, dtype=torch.long, device=ld)
+        for anchor in populated:
+            inst[anchor * K:(anchor + 1) * K] = int(batch_inst[anchor])
+        with torch.no_grad():
+            z_hn = self.teacher.teacher.encode(
+                chart.view(-1, *c_shape),
+                numeric.view(-1, *n_shape),
+                context.view(-1, *x_shape),
+                instrument_id=inst,
+            ).view(B, K, -1)
+            rows = F.normalize(self.target_proj_temporal(z_hn).detach(), dim=-1)
+        mask = torch.ones(B, B * K, dtype=torch.bool, device=ld)
+        for a in range(B):
+            pos = future_gids[a]
+            for i, gids_i in enumerate(row_gids):
+                anchor = populated[i]
+                for j, gid in enumerate(gids_i):
+                    col = anchor * K + j
+                    if gid is not None and pos is not None and gid != pos:
+                        mask[a, col] = False
+        return rows.view(B * K, -1), mask
+
+    def _bank_rows(self, batch: dict) -> Optional[torch.Tensor]:
+        """The current memory-bank tensor (L2-normalised), or None."""
+        if self._bank is None:
+            return None
+        if self._step < int(self.cfg.temporal_bank_warmup) or self._bank.size(0) == 0:
+            return None
+        return F.normalize(self._bank, dim=-1).detach()
+
+    def _bank_mask(self, batch: dict, n_rows: int) -> torch.Tensor:
+        """(B, n_rows) exclusion mask: True where a bank row is the SAME
+        sample as the anchor's own positive (dedup by global id)."""
+        B = int(batch["chart"].size(0))
+        mask = torch.zeros(B, n_rows, dtype=torch.bool, device=self.device)
+        future_gids = batch.get("future_gids") or [None] * B
+        bg = list(self._bank_gids)
+        if not bg:
+            return mask
+        for i in range(B):
+            pos = future_gids[i]
+            if pos is None:
+                continue
+            for j, gid in enumerate(bg[:n_rows]):
+                if gid == pos:
+                    mask[i, j] = True
+        return mask
+
+    def _push_bank(self, target: torch.Tensor, batch: dict) -> None:
+        """Append this batch's normalised target projections to the queue."""
+        if self._bank is None:
+            return
+        target = target.detach()
+        if not bool(torch.isfinite(target).all()):
+            logger.warning("ssl step %d: skipping bank push (non-finite targets)", self._step)
+            return
+        future_gids = batch.get("future_gids")
+        B = int(target.size(0))
+        if not future_gids or len(future_gids) != B:
+            return
+        cap = int(self._bank_capacity)
+        if self._bank.size(0) + B <= cap:
+            self._bank = torch.cat([self._bank, target], dim=0)
+            self._bank_gids.extend(future_gids)
+        else:
+            drop = min(B, cap)
+            self._bank = torch.cat([self._bank[drop:], target], dim=0)[:cap]
+            self._bank_gids = (self._bank_gids[drop:] + list(future_gids))[-cap:]
+            if self._bank.size(0) > cap:
+                self._bank = self._bank[:cap]
+
     # ------------------------------------------------------------------
     # Single-batch loss
     # ------------------------------------------------------------------
@@ -439,8 +710,39 @@ class SSLPretrainer:
             # Project both sides to the common contrast space.
             p_t = self.temporal_predictor(self.proj_temporal(z_t))
             with torch.no_grad():
-                p_tp1 = self.target_proj_temporal(z_tp1).detach()
-            losses["temporal"] = info_nce(p_t, p_tp1, self.cfg.temperature)
+                p_tp1 = F.normalize(self.target_proj_temporal(z_tp1).detach(), dim=-1)
+            train_mode = bool(self.model.training)
+            hard = None
+            hard_mask = None
+            bank = None
+            bank_mask = None
+            if train_mode:
+                hard, hard_mask = self._temporal_hard_negatives(batch)
+                bank = self._bank_rows(batch)
+                if bank is not None:
+                    bank_mask = self._bank_mask(batch, bank.size(0))
+            n0 = p_tp1.size(0)
+            extra_blocks = [x for x in (hard, bank) if x is not None]
+            row_mask = None
+            if extra_blocks:
+                extra = torch.cat(extra_blocks, dim=0)
+                n_hard = hard.size(0) if hard is not None else 0
+                row_mask = torch.zeros(
+                    n0, n0 + extra.size(0), dtype=torch.bool, device=self.device
+                )
+                if hard_mask is not None:
+                    row_mask[:, n0:n0 + hard_mask.size(1)] = hard_mask
+                if bank_mask is not None and n_hard + bank.size(0) <= extra.size(0):
+                    row_mask[:, n0 + n_hard:n0 + n_hard + bank_mask.size(1)] = bank_mask
+            if extra_blocks:
+                losses["temporal"] = info_nce(
+                    p_t, p_tp1, self.cfg.temperature,
+                    extra_negatives=extra, row_mask=row_mask,
+                )
+            else:
+                losses["temporal"] = info_nce(p_t, p_tp1, self.cfg.temperature)
+            if train_mode and self._bank is not None:
+                self._push_bank(p_tp1, batch)
 
         # --- 2) Cross-modal alignment ------------------------------------
         if self.cfg.use_cross_modal:
@@ -448,10 +750,19 @@ class SSLPretrainer:
             n_cls, _ = self.model.numeric(numeric)
             v_proj = self.proj_vision(v)
             n_proj = self.proj_numeric(n_cls)
-            # Symmetric InfoNCE: vision <-> numeric.
+            # Symmetric InfoNCE: vision <-> numeric (projection space).
             loss_v2n = info_nce(v_proj, n_proj, self.cfg.temperature)
             loss_n2v = info_nce(n_proj, v_proj, self.cfg.temperature)
             losses["alignment"] = 0.5 * (loss_v2n + loss_n2v)
+            # Trunk-level alignment (no projections): forces the raw
+            # embeddings to agree, not just their heads. Soft-target mode
+            # detaches the numeric side (momentum>0) to keep the stronger
+            # modality stable while pushing vision toward it.
+            if self.cfg.weight_trunk_align > 0.0:
+                vn = F.normalize(v.reshape(v.size(0), -1), dim=-1)
+                nn = F.normalize(n_cls.detach() if self.cfg.trunk_align_momentum > 0.0 else n_cls, dim=-1)
+                trunk_cos = (vn * nn).sum(dim=-1).mean()
+                losses["trunk_align"] = self.cfg.weight_trunk_align * (1.0 - trunk_cos)
 
         # --- 3) Masked numeric modeling -----------------------------------
         if self.cfg.use_masked_modeling:
@@ -459,11 +770,25 @@ class SSLPretrainer:
                 self.model.numeric, self.reconstructor, numeric, self.cfg.mask_ratio
             )
 
+        # --- 3b) Instrument-embedding spread (fixes symbol collisions) ----
+        if self.cfg.instrument_contrast_w > 0.0 and self.model.context.instrument_emb is not None:
+            emb = self.model.context.instrument_emb.weight
+            n_inst = emb.size(0)
+            if n_inst > 1:
+                e = F.normalize(emb, dim=-1)
+                off = e @ e.t()
+                mask_off = ~torch.eye(n_inst, dtype=torch.bool, device=off.device)
+                losses["instrument_contrast"] = (
+                    self.cfg.instrument_contrast_w * off[mask_off].mean()
+                )
+
         # Total = weighted sum.
         total = (
             self.cfg.weight_temporal * losses.get("temporal", torch.zeros((), device=self.device))
             + self.cfg.weight_alignment * losses.get("alignment", torch.zeros((), device=self.device))
             + self.cfg.weight_masked * losses.get("masked", torch.zeros((), device=self.device))
+            + losses.get("trunk_align", torch.zeros((), device=self.device))
+            + losses.get("instrument_contrast", torch.zeros((), device=self.device))
         )
         losses["total"] = total
         return losses
@@ -492,14 +817,38 @@ class SSLPretrainer:
                 [self.augmentor.apply(fut[i], k) for i, k in enumerate(keys_fut)], dim=0
             )
 
+    def _lr_scale(self, *, step: int) -> float:
+        """LR multiplier: linear warmup followed by the configured schedule.
+
+        ``constant`` (canonical v1): 1.0 after warmup.
+        ``cosine``: decays from 1.0 post-warmup to ``cosine_min_scale`` over
+        the RUN's own budget. The step anchor is the resume point (if any):
+        two measurings MUST NOT consume the cosine budget of the previous run
+        (a resume with a tiny floor-lr was a real bug measured at 4.5e-07).
+        """
+        eff = int(step) - int(self._resume_step)
+        warmup = max(0, int(self.cfg.warmup_steps))
+        if warmup > 0 and eff < warmup:
+            return min(1.0, float(eff + 1) / warmup)
+        if self.cfg.lr_schedule != "cosine":
+            return 1.0
+        total = max(0, int(self.cfg.total_steps))
+        if total <= 0:
+            total = int(self._estimated_total_steps)
+        remaining = total - warmup
+        if remaining <= 0:
+            return min(self.cfg.cosine_min_scale, 1.0)
+        progress = min(1.0, max(0.0, float(eff - warmup) / remaining))
+        scale = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min(self.cfg.cosine_min_scale, 1.0) + (1.0 - min(self.cfg.cosine_min_scale, 1.0)) * scale
+
     def step(self, batch: dict) -> dict:
         """Run one optimisation step on a single batch."""
         self.model.train()
         if self.augmentor is not None:
             self._augment_step_batch(batch)
-        lr_scale = 1.0
-        if self.cfg.warmup_steps > 0:
-            lr_scale = min(1.0, float(self._step + 1) / self.cfg.warmup_steps)
+        batch = self._to_device(batch)
+        lr_scale = self._lr_scale(step=self._step)
         for group in self.opt.param_groups:
             group["lr"] = self.cfg.lr * lr_scale
         losses = self._loss(batch)
@@ -545,6 +894,8 @@ class SSLPretrainer:
 
     def _paired_dataset(self, dataset: Dataset) -> Dataset:
         if self.cfg.use_temporal_contrast:
+            if isinstance(dataset, TemporalPairDataset):
+                return dataset  # already paired (idempotent)
             return TemporalPairDataset(dataset, horizon=self.cfg.temporal_horizon)
         return dataset
 
@@ -558,6 +909,10 @@ class SSLPretrainer:
         source = self._paired_dataset(dataset)
         if len(source) == 0:
             raise ValueError("S1 dataset has no temporal pairs after window/horizon trimming")
+        if self.cfg.use_temporal_contrast and isinstance(source, TemporalPairDataset):
+            # Stash the active pair source so the loss can sample
+            # deterministic same-instrument hard negatives by gid.
+            self._pair_source = source
         use_cuda = self.device.type == "cuda"
         workers = int(os.environ.get("ZHISA_SSL_WORKERS", "0"))
         generator = None
@@ -622,6 +977,9 @@ class SSLPretrainer:
         cfg = self.cfg
         history: list[dict] = []
         timer = Timer()
+        if cfg.lr_schedule == "cosine" and self._estimated_total_steps <= 0:
+            steps_per_epoch = max(1, len(self._paired_dataset(train_ds)) // max(1, cfg.batch_size))
+            self._estimated_total_steps = int(cfg.total_steps) or (cfg.epochs * steps_per_epoch)
         for _ in range(cfg.epochs):
             epoch = self._completed_epochs
             for leaf in _iter_leaf_datasets(train_ds):
@@ -750,6 +1108,11 @@ class SSLPretrainer:
         }
         if self.teacher is not None:
             payload["teacher"] = self.teacher.state_dict()
+        if self._bank is not None:
+            payload["temporal_bank"] = {
+                "tensor": self._bank,
+                "gids": list(self._bank_gids),
+            }
         tmp = p.with_name(f".{p.name}.tmp")
         torch.save(payload, tmp)
         os.replace(tmp, p)
@@ -770,7 +1133,14 @@ class SSLPretrainer:
             self.temporal_predictor.load_state_dict(sd["temporal_predictor"])
         self.proj_vision.load_state_dict(sd["proj_vision"])
         self.proj_numeric.load_state_dict(sd["proj_numeric"])
-        self.reconstructor.load_state_dict(sd["reconstructor"])
+        # The reconstructor head shape follows the numeric input width
+        # (patch_size * in_features); tolerate width changes (e.g. a
+        # cross-asset dataset with more feature columns) by shape-filtering.
+        if "reconstructor" in sd:
+            filtered_recon = _filter_matching_state_dict(
+                sd["reconstructor"], self.reconstructor
+            )
+            self.reconstructor.load_state_dict(filtered_recon, strict=False)
         if "target_proj_temporal" in sd:
             self.target_proj_temporal.load_state_dict(sd["target_proj_temporal"])
         else:
@@ -796,6 +1166,26 @@ class SSLPretrainer:
         self._best_val_total = float(
             trainer_state.get("best_val_total", float("inf"))
         )
+        if optimizer_restored:
+            # Anchor the LR schedule at the resumed step so a cosine decay
+            # gets THIS run's full budget (old bug: floor-lr on resume).
+            self._resume_step = self._step
+        else:
+            self._resume_step = 0
+        bank_payload = sd.get("temporal_bank")
+        if bank_payload is not None and self._bank is not None:
+            bank_t = bank_payload.get("tensor")
+            if (
+                torch.is_tensor(bank_t)
+                and bank_t.numel() > 0
+                and bank_t.shape[-1] == self.cfg.projection_dim
+            ):
+                self._bank = bank_t.to(self.device)
+                self._bank_gids = list(bank_payload.get("gids", []))
+                logger.info("ssl restored temporal bank (%d rows)", self._bank.size(0))
+            else:
+                self._bank = torch.zeros(0, self.cfg.projection_dim, device=self.device)
+                self._bank_gids = []
         status = {
             "optimizer_restored": optimizer_restored,
             "legacy_warm_start": "trainer_state" not in sd,
@@ -812,15 +1202,23 @@ class SSLPretrainer:
 
     def _to_device(self, batch) -> dict:
         if isinstance(batch, dict):
-            return {
-                key: value.to(self.device, non_blocking=True)
-                for key, value in batch.items()
-                if torch.is_tensor(value)
-            }
+            out: dict = {}
+            for key, value in batch.items():
+                if torch.is_tensor(value):
+                    out[key] = value.to(self.device, non_blocking=True)
+                else:
+                    out[key] = value  # keep gids/meta lists as-is
+            return out
         return {
             "chart": batch.chart.to(self.device, non_blocking=True),
             "numeric": batch.numeric.to(self.device, non_blocking=True),
             "context": batch.context.to(self.device, non_blocking=True),
+            **{
+                k: getattr(batch, k).to(self.device, non_blocking=True)
+                for k in ("future_chart", "future_numeric", "future_context",
+                          "instrument_id", "macro_numeric")
+                if getattr(batch, k, None) is not None
+            },
         }
 
 

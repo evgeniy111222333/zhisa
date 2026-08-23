@@ -6,10 +6,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from zhisa.models.policy import build_default_policy
+from zhisa.scripts._rl_training import build_policy_from_checkpoint
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import visualize_decisions
-from visualize_decisions import _checkpoint_policy_config
 from zhisa.env.trading_env import TradingEnv, EnvConfig
 from zhisa.scripts._real_data import load_market_dataframe
 
@@ -21,20 +19,11 @@ def main():
 
     print(f"Loading checkpoint {args.checkpoint}...")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = _checkpoint_policy_config(ckpt)
-    
-    in_num = int(cfg.get("in_numeric_features", 32))
-    in_ctx = int(cfg.get("in_context_features", 10))
-    window = int(cfg.get("window", 32))
-    
-    model = build_default_policy(
-        in_numeric_features=in_num,
-        in_context_features=in_ctx,
-        window=window,
-        image_size=int(cfg.get("image_size", EnvConfig.image_size)),
-    )
-    model.load_state_dict(ckpt["model"])
+    model = build_policy_from_checkpoint(ckpt)
     model.eval()
+
+    window = int(model.cfg.window)
+    in_num = int(model.cfg.in_numeric_features)
 
     print(f"Loading {args.symbol} data...")
     class DummyArgs:
@@ -58,7 +47,7 @@ def main():
     num = torch.from_numpy(obs["numeric"]).unsqueeze(0).float()
     
     with torch.no_grad():
-        v_emb = model.vision(chart)
+        v_emb = model.plain_vision(chart)
         n_emb, _ = model.numeric(num)
         
     print(f"Vision embedding shape: {v_emb.shape}")
