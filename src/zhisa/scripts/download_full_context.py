@@ -25,22 +25,29 @@ VISION_BASE_URL = "https://data.binance.vision/data/futures/um/daily/metrics"
 API_BASE_URL = "https://fapi.binance.com"
 
 
-def _fetch_api_json(path: str, params: dict, retries: int = 3) -> list:
+def _fetch_api_json(path: str, params: dict, retries: int = 12) -> list:
     import urllib.parse
+    import time
+
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
     url = f"{API_BASE_URL}{path}?{query}" if query else f"{API_BASE_URL}{path}"
-    
+
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "zhisa-hybrid-context/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as res:
+            with urllib.request.urlopen(req, timeout=20) as res:
                 return json.loads(res.read().decode("utf-8"))
         except Exception as e:
+            # Hard backoff on rate-limit waves (parallel track runs share the
+            # same fapi IP budget) so a 429 storm cannot crash the downloader.
+            if getattr(e, "code", None) in (429, 418):
+                sleepy = 5.0 + 3.0 * attempt
+            else:
+                sleepy = 2.0 + 1.5 * attempt
+            time.sleep(sleepy)
             if attempt == retries - 1:
                 logger.error(f"Failed to fetch {url}: {e}")
                 raise
-            import time
-            time.sleep(1)
     return []
 
 
