@@ -1,0 +1,86 @@
+# S1 Phase A (1h) — HEAVY v3 (37-asset universe + reconstruction/gradient/instrument upgrades).
+# Data: data/prepared/s1_1h_37m_v1 (37 Binance USD-M perps, 2024-03 -> now, with
+# cross-asset + funding/OI + micro + basis channels).
+#
+# Evidence-gated upgrades (vs v2.5):
+#   - recon_depth/gain/masked_target_norm: anti-shrinkage reconstructor
+#     (measured fit slope 0.28/corr 0.60 in v2.5, masked-gain stuck ~1.2);
+#   - vision_grad_scale: fix numeric-dominance (numeric got ~40% vs vision ~2%
+#     of gradients -> z numeric-governed -> perturb-scale 0.8-0.9deg);
+#   - instrument_z_contrast_w: act on TRUNK z by instrument id (measured id only
+#     flips z by ~5deg -> silhouette ~0.005);
+#   - augment_transforms: chart augmentation (train-only, deterministic keys);
+#   - with 37 symbols the cross-sectional contrast finally has enough classes.
+seed: 0
+device: cuda
+epochs: 6
+batch_size: 64
+chart_window: 128
+image_size: 128
+
+model:
+  embed_dim: 384
+  vision_mode: columnformer
+  vision_n_layers: 4
+  vision_n_heads: 8
+  vision_causal: true
+  vision_reader: attention_pool
+  token_fusion: true
+  fusion_token_layers: 3
+  fusion_token_heads: 8
+  freq_branch: true
+  freq_k: 8
+  numeric_layers: 4
+  numeric_causal: false
+  fusion_layers: 4
+  memory_layers: 4
+  memory_max_len: 128
+  memory_residual: false
+  memory_input_norm: false
+  n_instruments: 37
+  encoder_ff_mult: 4.0
+  dropout: 0.1
+
+optim:
+  lr: 0.0003
+  weight_decay: 0.0001
+  warmup_steps: 500
+
+ssl:
+  projection_dim: 128
+  hidden_dim: 256
+  temperature: 0.1
+  mask_ratio: 0.5
+  ema_decay: 0.996
+  weight_temporal: 1.0
+  weight_masked: 1.0
+  weight_alignment: 0.5
+  grad_clip: 1.0
+  log_every: 50
+  temporal_horizon: 4
+  val_max_batches: 64
+  checkpoint_every_steps: 500
+  use_ema_teacher: true
+  use_masked_modeling: true
+  use_temporal_contrast: true
+  use_cross_modal: true
+  weight_trunk_align: 0.25
+  trunk_align_momentum: 0.99
+  instrument_contrast_w: 0.02
+  # --- P1: anti-shrinkage reconstructor ---
+  recon_depth: 2
+  recon_use_norm: true
+  recon_use_gain: true
+  masked_target_norm: true
+  # --- P2: modality gradient rebalance ---
+  vision_grad_scale: 3.0
+  # --- P3: instrument contrast on trunk z ---
+  instrument_z_contrast_w: 0.03
+  # --- chart augmentation (train-only) ---
+  augment_transforms: [mirror, color_jitter, crop, gaussian_noise]
+  augment_strength: 0.05
+  augment_crop_frac: 0.9
+  augment_noise_std: 0.01
+  lr_schedule: cosine
+  cosine_min_scale: 0.003
+  total_steps: 0
