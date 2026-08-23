@@ -145,6 +145,17 @@ def _embeddings(model, ds, device, n=1500, bs=64, seed=7):
     return np.concatenate(Z), idx
 
 
+def _rank_metrics(Z: np.ndarray) -> tuple[float, int]:
+    """top-10 SVD variance share + effective dims (>1% variance)."""
+    Z = np.asarray(Z, dtype=np.float64)
+    Zc = Z - Z.mean(axis=0, keepdims=True)
+    if Zc.shape[0] < 3:
+        return 1.0, int(min(Zc.shape[1], max(Zc.shape[0], 1)))
+    sv = np.linalg.svd(Zc, compute_uv=False)
+    vs = (sv ** 2) / max(float((sv ** 2).sum()), 1e-12)
+    return round(float(vs[:10].sum()), 4), int((vs > 0.01).sum())
+
+
 def _gradient_balance(tr: SSLPretrainer, ds, device, batches: int = 2, n_cpc: int = 64) -> dict:
     """Gradient-l2 probe per module (vision/numeric/fusion/... ) over the SSL loss.
 
@@ -535,6 +546,40 @@ def main(argv=None) -> int:
             "embedding_top10_var_share": rank_ratio,
             "embedding_dead_dim_frac": round(dead_dim, 5) if isinstance(dead_dim, float) else dead_dim,
         }
+        # ---- "vision alive" gate: how much rank the CHART stream alone spans ----
+        # A dead vision encoder outputs an almost-constant embedding regardless of
+        # the chart (measured below: chart_only top10-SVD ~0.9995 while numeric-only
+        # keeps ~10 effective dims). This is THE structural driver of low embedding
+        # variation + numeric dominance, and is not evident from SSL loss metrics.
+        if tag != "random_init":
+            try:
+                dsv = ds_list[symbols[0]]
+                stride = max(1, int(spec.chart_window))
+                ridx = np.arange(0, min(len(dsv) - 1, stride * 128), stride)
+                Zf: list[np.ndarray] = []
+                Zn: list[np.ndarray] = []
+                Zc: list[np.ndarray] = []
+                with torch.no_grad():
+                    for s in ridx:
+                        b = multimodal_collate([dsv[int(s)]])
+                        c = b.chart.to(device)
+                        n = b.numeric.to(device)
+                        t = b.context.to(device)
+                        i = b.instrument_id.to(device)
+                        Zf.append(model.encode(c, n, t, instrument_id=i).cpu().numpy()[0])
+                        Zc.append(model.encode(c * 0.0, n, t, instrument_id=i).cpu().numpy()[0])
+                        Zn.append(model.encode(c, n * 0.0, t, instrument_id=i).cpu().numpy()[0])
+                if len(Zf) >= 8:
+                    f10, fed = _rank_metrics(np.stack(Zf))
+                    c10, ced = _rank_metrics(np.stack(Zc))
+                    n10, ned = _rank_metrics(np.stack(Zn))
+                    rep["vision_alive"] = {
+                        "full_top10_svd": f10, "full_eff_dim": fed,
+                        "chart_only_top10_svd": c10, "chart_only_eff_dim": ced,
+                        "numeric_only_top10_svd": n10, "numeric_only_eff_dim": ned,
+                    }
+            except Exception as exc:
+                rep["vision_alive"] = f"err:{type(exc).__name__}:{exc}"
         return Z, np.concatenate(instr), rep
 
     ds_list = {}

@@ -243,6 +243,10 @@ def test_forensics_cli_end_to_end(tmp_path, monkeypatch):
     assert "visible_mse" in bt["masked_recon"] and bt["masked_recon"]["gain_vs_baseline"] > 0.0
     assert "alignment_cos_per_symbol" in bt and -1.0 <= bt["alignment_cos"] <= 1.0
     assert "embedding_dead_dim_frac" in bt["internals"]
+    assert "vision_alive" in bt  # chart-only rank gate is always reported
+    va = bt["vision_alive"]
+    assert 0.0 <= va["chart_only_top10_svd"] <= 1.0
+    assert va["chart_only_eff_dim"] >= 1 or va["chart_only_eff_dim"] == 0
 
     ws = rep["weight_stats_best"]
     assert ws["nan_params"] == 0 and ws["inf_params"] == 0
