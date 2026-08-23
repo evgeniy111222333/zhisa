@@ -184,7 +184,10 @@ def _load_symbol(tsdb: TimeSeriesDB, symbol: str, timeframe: str) -> pd.DataFram
         df.index = df.index.tz_localize("UTC")
     else:
         df.index = df.index.tz_convert("UTC")
-    df = df[list(OHLCV_COLUMNS)].astype(float)
+    # Keep OHLCV + any extra numeric columns (micro_* microstructure channels)
+    # so they reach the prepared root (a clean OHLCV-only slice silently
+    # dropped them before this fix).
+    df = df.astype(float)
     df = df[~df.index.duplicated(keep="last")].sort_index()
     return df
 
