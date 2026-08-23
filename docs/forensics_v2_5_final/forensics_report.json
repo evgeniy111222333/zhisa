@@ -1,0 +1,1422 @@
+{
+  "behaviour_random": {
+    "alignment_cos": -0.0501,
+    "alignment_cos_per_symbol": {
+      "BTC_USDT": -0.0501,
+      "TRX_USDT": -0.0619
+    },
+    "cpc_forward": {
+      "margin": 0.0097,
+      "mean_cos": 0.9798,
+      "top1_in_batch": 0.5859
+    },
+    "finite": true,
+    "internals": {
+      "augment_invariance_cos": 0.9998261332511902,
+      "chart_noise_angle_deg": 0.0525,
+      "embedding_dead_dim_frac": 0.0,
+      "embedding_pairwise_cos_mean": 0.99584,
+      "embedding_top10_var_share": 0.918989896774292,
+      "eval_determinism_max_delta": 0.0
+    },
+    "masked_recon": {
+      "gain_vs_baseline": 0.617,
+      "masked_mse": 1.42298,
+      "mean_baseline_mse": 0.87827,
+      "visible_mse": 1.4025,
+      "visible_over_masked": 0.9856
+    },
+    "norm_mean": 10.1906,
+    "numeric_perturb_1pct": {
+      "angle_deg_additive": 0.0148,
+      "angle_deg_scale": 0.0373,
+      "delta_norm": 0.00688,
+      "post_perturb_cos_additive": 1.0,
+      "post_perturb_cos_scale": 1.0
+    },
+    "tag": "random_init",
+    "temporal_autocorr_cos": {
+      "BTC_USDT": [
+        0.9997,
+        0.9997,
+        0.9997,
+        0.9999,
+        0.9997,
+        0.9996,
+        0.9996,
+        0.9998,
+        0.9996,
+        0.9996,
+        0.9996,
+        0.9997
+      ],
+      "TRX_USDT": [
+        0.9997,
+        0.9996,
+        0.9997,
+        0.9999,
+        0.9997,
+        0.9996,
+        0.9996,
+        0.9998,
+        0.9996,
+        0.9995,
+        0.9995,
+        0.9997
+      ]
+    }
+  },
+  "behaviour_trained": {
+    "alignment_cos": 0.99,
+    "alignment_cos_per_symbol": {
+      "BTC_USDT": 0.99,
+      "TRX_USDT": 0.9909
+    },
+    "cpc_forward": {
+      "margin": 0.8947,
+      "mean_cos": 0.9055,
+      "top1_in_batch": 0.9961
+    },
+    "finite": true,
+    "internals": {
+      "augment_invariance_cos": 0.9870540499687195,
+      "chart_noise_angle_deg": 0.2585,
+      "embedding_dead_dim_frac": 0.0,
+      "embedding_pairwise_cos_mean": 0.23307,
+      "embedding_top10_var_share": 0.8758125901222229,
+      "eval_determinism_max_delta": 0.0
+    },
+    "masked_recon": {
+      "gain_vs_baseline": 2.011,
+      "masked_mse": 0.43665,
+      "mean_baseline_mse": 0.87827,
+      "visible_mse": 0.77562,
+      "visible_over_masked": 1.7763
+    },
+    "norm_mean": 4.7082,
+    "numeric_perturb_1pct": {
+      "angle_deg_additive": 0.4203,
+      "angle_deg_scale": 0.9848,
+      "delta_norm": 0.06688,
+      "post_perturb_cos_additive": 0.99997,
+      "post_perturb_cos_scale": 0.99982
+    },
+    "tag": "trained_best",
+    "temporal_autocorr_cos": {
+      "BTC_USDT": [
+        0.9362,
+        0.8468,
+        0.8945,
+        0.9663,
+        0.895,
+        0.8056,
+        0.853,
+        0.9195,
+        0.848,
+        0.7624,
+        0.8086,
+        0.8703
+      ],
+      "TRX_USDT": [
+        0.8783,
+        0.8869,
+        0.8782,
+        0.9521,
+        0.8276,
+        0.8416,
+        0.8231,
+        0.8875,
+        0.7709,
+        0.7911,
+        0.7649,
+        0.8205
+      ]
+    },
+    "vision_alive": {
+      "chart_only_eff_dim": 14,
+      "chart_only_top10_svd": 0.8986,
+      "full_eff_dim": 15,
+      "full_top10_svd": 0.8933,
+      "numeric_only_eff_dim": 6,
+      "numeric_only_top10_svd": 0.999
+    }
+  },
+  "best": "/data/out/phase2_heavy_v2_5_best.pt",
+  "best_last_weight_l2": 34.558,
+  "best_meta": {
+    "best_val_total": 0.24876128579489887,
+    "completed_epochs": 8,
+    "step": 51864,
+    "val_totals_per_epoch": [
+      0.7983,
+      0.7194,
+      0.7317,
+      0.7344,
+      0.7193,
+      0.9814,
+      0.9484,
+      0.2488
+    ],
+    "warm_start_from": null
+  },
+  "ema_student_cos_mean": 0.9264,
+  "gradient_balance_trained": "err:RuntimeError:Expected all tensors to be on the same device, but got index is on cpu, different from other tensors on cuda:0 (when checking argument in method wrapper_CUDA__index_select)",
+  "instrument_emb": {
+    "max_offdiag_cos": 0.4743,
+    "mean_offdiag_cos": -0.0848
+  },
+  "instrument_separation_silhouette": 0.0053,
+  "instrument_separation_silhouette_random": 0.0016,
+  "knn_thumbnails": [
+    {
+      "neighbors": [
+        "/data/out/forensics_v2_5_final/knn_q0_n0.png",
+        "/data/out/forensics_v2_5_final/knn_q0_n1.png",
+        "/data/out/forensics_v2_5_final/knn_q0_n2.png",
+        "/data/out/forensics_v2_5_final/knn_q0_n3.png",
+        "/data/out/forensics_v2_5_final/knn_q0_n4.png",
+        "/data/out/forensics_v2_5_final/knn_q0_n5.png"
+      ],
+      "query_index": 256
+    },
+    {
+      "neighbors": [
+        "/data/out/forensics_v2_5_final/knn_q1_n0.png",
+        "/data/out/forensics_v2_5_final/knn_q1_n1.png",
+        "/data/out/forensics_v2_5_final/knn_q1_n2.png",
+        "/data/out/forensics_v2_5_final/knn_q1_n3.png",
+        "/data/out/forensics_v2_5_final/knn_q1_n4.png",
+        "/data/out/forensics_v2_5_final/knn_q1_n5.png"
+      ],
+      "query_index": 538
+    },
+    {
+      "neighbors": [
+        "/data/out/forensics_v2_5_final/knn_q2_n0.png",
+        "/data/out/forensics_v2_5_final/knn_q2_n1.png",
+        "/data/out/forensics_v2_5_final/knn_q2_n2.png",
+        "/data/out/forensics_v2_5_final/knn_q2_n3.png",
+        "/data/out/forensics_v2_5_final/knn_q2_n4.png",
+        "/data/out/forensics_v2_5_final/knn_q2_n5.png"
+      ],
+      "query_index": 2432
+    }
+  ],
+  "last": "/data/out/phase2_heavy_v2_5_last.pt",
+  "last_meta": {
+    "best_val_total": 0.24876128579489887,
+    "completed_epochs": 10,
+    "step": 64592,
+    "val_totals_per_epoch": [
+      0.7983,
+      0.7194,
+      0.7317,
+      0.7344,
+      0.7193,
+      0.9814,
+      0.9484,
+      0.2488,
+      0.2501,
+      0.2837
+    ],
+    "warm_start_from": null
+  },
+  "model_config_effective": {
+    "memory_input_norm": false,
+    "memory_residual": false
+  },
+  "model_config_short": {
+    "embed_dim": 384,
+    "encoder_ff_mult": 4.0,
+    "freq_branch": true,
+    "fusion_layers": 4,
+    "memory_layers": 4,
+    "n_instruments": 12,
+    "n_regime_classes": 4,
+    "numeric_causal": false,
+    "numeric_layers": 4,
+    "token_fusion": true,
+    "two_tokens_per_bar": false,
+    "use_memory": true,
+    "vision_mode": "columnformer",
+    "vision_reader": "attention_pool"
+  },
+  "provenance": {
+    "dataset_manifest_checksum": "b874977231a7cb6cdb6209ccf5b90934680870d17aaf273c4f6484872b49a54c",
+    "dataset_root": "/data/datasets/s1_1h_12m_v2",
+    "dataset_timeframe": "1h",
+    "render": {
+      "augmentation": null,
+      "augmentation_key_scheme": null,
+      "render_fingerprint": null,
+      "render_spec_hash": null,
+      "render_store_checksum": null,
+      "renderer_version": null
+    },
+    "stage": "s1_ssl",
+    "trading_policy_ready": false
+  },
+  "weight_stats_best": {
+    "inf_params": 0,
+    "nan_params": 0,
+    "near_zero_total_frac": 0.0003,
+    "per_layer": {
+      "context.instrument_emb.weight": {
+        "abs_mean": 0.678089,
+        "near_zero_frac": 0.0,
+        "std": 0.8306
+      },
+      "context.net.0.bias": {
+        "abs_mean": 0.097955,
+        "near_zero_frac": 0.0,
+        "std": 0.120409
+      },
+      "context.net.0.weight": {
+        "abs_mean": 0.098222,
+        "near_zero_frac": 0.0,
+        "std": 0.14747
+      },
+      "context.net.3.bias": {
+        "abs_mean": 0.077155,
+        "near_zero_frac": 0.0,
+        "std": 0.086471
+      },
+      "context.net.3.weight": {
+        "abs_mean": 0.089519,
+        "near_zero_frac": 0.0,
+        "std": 0.111211
+      },
+      "fusion.encoder.layers.0.linear1.bias": {
+        "abs_mean": 0.089594,
+        "near_zero_frac": 0.0,
+        "std": 0.071599
+      },
+      "fusion.encoder.layers.0.linear1.weight": {
+        "abs_mean": 0.053186,
+        "near_zero_frac": 0.0,
+        "std": 0.066751
+      },
+      "fusion.encoder.layers.0.linear2.bias": {
+        "abs_mean": 0.035175,
+        "near_zero_frac": 0.0,
+        "std": 0.059433
+      },
+      "fusion.encoder.layers.0.linear2.weight": {
+        "abs_mean": 0.0473,
+        "near_zero_frac": 0.0,
+        "std": 0.064118
+      },
+      "fusion.encoder.layers.0.norm1.bias": {
+        "abs_mean": 0.044682,
+        "near_zero_frac": 0.0,
+        "std": 0.054343
+      },
+      "fusion.encoder.layers.0.norm1.weight": {
+        "abs_mean": 0.946524,
+        "near_zero_frac": 0.0,
+        "std": 0.064656
+      },
+      "fusion.encoder.layers.0.norm2.bias": {
+        "abs_mean": 0.085178,
+        "near_zero_frac": 0.0,
+        "std": 0.107007
+      },
+      "fusion.encoder.layers.0.norm2.weight": {
+        "abs_mean": 0.81312,
+        "near_zero_frac": 0.0,
+        "std": 0.108613
+      },
+      "fusion.encoder.layers.0.self_attn.in_proj_bias": {
+        "abs_mean": 0.043503,
+        "near_zero_frac": 0.0,
+        "std": 0.075343
+      },
+      "fusion.encoder.layers.0.self_attn.in_proj_weight": {
+        "abs_mean": 0.054518,
+        "near_zero_frac": 0.0,
+        "std": 0.06837
+      },
+      "fusion.encoder.layers.0.self_attn.out_proj.bias": {
+        "abs_mean": 0.044157,
+        "near_zero_frac": 0.0,
+        "std": 0.058303
+      },
+      "fusion.encoder.layers.0.self_attn.out_proj.weight": {
+        "abs_mean": 0.057065,
+        "near_zero_frac": 0.0,
+        "std": 0.071641
+      },
+      "fusion.encoder.layers.1.linear1.bias": {
+        "abs_mean": 0.07843,
+        "near_zero_frac": 0.0,
+        "std": 0.064084
+      },
+      "fusion.encoder.layers.1.linear1.weight": {
+        "abs_mean": 0.055449,
+        "near_zero_frac": 0.0,
+        "std": 0.07092
+      },
+      "fusion.encoder.layers.1.linear2.bias": {
+        "abs_mean": 0.035469,
+        "near_zero_frac": 0.0,
+        "std": 0.107585
+      },
+      "fusion.encoder.layers.1.linear2.weight": {
+        "abs_mean": 0.047064,
+        "near_zero_frac": 0.0,
+        "std": 0.065944
+      },
+      "fusion.encoder.layers.1.norm1.bias": {
+        "abs_mean": 0.03421,
+        "near_zero_frac": 0.0,
+        "std": 0.043074
+      },
+      "fusion.encoder.layers.1.norm1.weight": {
+        "abs_mean": 0.892294,
+        "near_zero_frac": 0.0,
+        "std": 0.081782
+      },
+      "fusion.encoder.layers.1.norm2.bias": {
+        "abs_mean": 0.056528,
+        "near_zero_frac": 0.0,
+        "std": 0.069494
+      },
+      "fusion.encoder.layers.1.norm2.weight": {
+        "abs_mean": 1.03883,
+        "near_zero_frac": 0.0,
+        "std": 0.105303
+      },
+      "fusion.encoder.layers.1.self_attn.in_proj_bias": {
+        "abs_mean": 0.032869,
+        "near_zero_frac": 0.0009,
+        "std": 0.054713
+      },
+      "fusion.encoder.layers.1.self_attn.in_proj_weight": {
+        "abs_mean": 0.055097,
+        "near_zero_frac": 0.0,
+        "std": 0.06992
+      },
+      "fusion.encoder.layers.1.self_attn.out_proj.bias": {
+        "abs_mean": 0.051435,
+        "near_zero_frac": 0.0,
+        "std": 0.124062
+      },
+      "fusion.encoder.layers.1.self_attn.out_proj.weight": {
+        "abs_mean": 0.05339,
+        "near_zero_frac": 0.0,
+        "std": 0.07829
+      },
+      "fusion.encoder.layers.2.linear1.bias": {
+        "abs_mean": 0.074809,
+        "near_zero_frac": 0.0,
+        "std": 0.054963
+      },
+      "fusion.encoder.layers.2.linear1.weight": {
+        "abs_mean": 0.050009,
+        "near_zero_frac": 0.0,
+        "std": 0.064805
+      },
+      "fusion.encoder.layers.2.linear2.bias": {
+        "abs_mean": 0.031944,
+        "near_zero_frac": 0.0,
+        "std": 0.128511
+      },
+      "fusion.encoder.layers.2.linear2.weight": {
+        "abs_mean": 0.040067,
+        "near_zero_frac": 0.0,
+        "std": 0.058834
+      },
+      "fusion.encoder.layers.2.norm1.bias": {
+        "abs_mean": 0.043527,
+        "near_zero_frac": 0.0,
+        "std": 0.05688
+      },
+      "fusion.encoder.layers.2.norm1.weight": {
+        "abs_mean": 0.886943,
+        "near_zero_frac": 0.0,
+        "std": 0.090823
+      },
+      "fusion.encoder.layers.2.norm2.bias": {
+        "abs_mean": 0.115775,
+        "near_zero_frac": 0.0,
+        "std": 0.138367
+      },
+      "fusion.encoder.layers.2.norm2.weight": {
+        "abs_mean": 1.141321,
+        "near_zero_frac": 0.0,
+        "std": 0.078276
+      },
+      "fusion.encoder.layers.2.self_attn.in_proj_bias": {
+        "abs_mean": 0.026428,
+        "near_zero_frac": 0.0,
+        "std": 0.042742
+      },
+      "fusion.encoder.layers.2.self_attn.in_proj_weight": {
+        "abs_mean": 0.058553,
+        "near_zero_frac": 0.0,
+        "std": 0.073692
+      },
+      "fusion.encoder.layers.2.self_attn.out_proj.bias": {
+        "abs_mean": 0.041824,
+        "near_zero_frac": 0.0,
+        "std": 0.134057
+      },
+      "fusion.encoder.layers.2.self_attn.out_proj.weight": {
+        "abs_mean": 0.050635,
+        "near_zero_frac": 0.0,
+        "std": 0.085579
+      },
+      "fusion.norm.bias": {
+        "abs_mean": 0.045971,
+        "near_zero_frac": 0.0,
+        "std": 0.075816
+      },
+      "fusion.norm.weight": {
+        "abs_mean": 0.529638,
+        "near_zero_frac": 0.0,
+        "std": 0.064809
+      },
+      "fusion.out_proj.bias": {
+        "abs_mean": 0.04643,
+        "near_zero_frac": 0.0,
+        "std": 0.058207
+      },
+      "fusion.out_proj.weight": {
+        "abs_mean": 0.03273,
+        "near_zero_frac": 0.0,
+        "std": 0.041113
+      },
+      "fusion.pos_pe": {
+        "abs_mean": 0.016944,
+        "near_zero_frac": 0.0,
+        "std": 0.022557
+      },
+      "fusion.query": {
+        "abs_mean": 0.116642,
+        "near_zero_frac": 0.0,
+        "std": 0.163052
+      },
+      "fusion.type_emb.weight": {
+        "abs_mean": 0.777045,
+        "near_zero_frac": 0.0,
+        "std": 0.973666
+      },
+      "heads.direction.bias": {
+        "abs_mean": 0.01488,
+        "near_zero_frac": 0.0,
+        "std": 0.022614
+      },
+      "heads.direction.weight": {
+        "abs_mean": 0.044923,
+        "near_zero_frac": 0.0,
+        "std": 0.051399
+      },
+      "heads.policy_logits.bias": {
+        "abs_mean": 0.044122,
+        "near_zero_frac": 0.0,
+        "std": 0.045682
+      },
+      "heads.policy_logits.weight": {
+        "abs_mean": 0.044578,
+        "near_zero_frac": 0.0,
+        "std": 0.051354
+      },
+      "heads.regime.bias": {
+        "abs_mean": 0.021747,
+        "near_zero_frac": 0.0,
+        "std": 0.033603
+      },
+      "heads.regime.weight": {
+        "abs_mean": 0.044136,
+        "near_zero_frac": 0.0,
+        "std": 0.050463
+      },
+      "heads.return_pred.bias": {
+        "abs_mean": 0.063761,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "heads.return_pred.weight": {
+        "abs_mean": 0.040499,
+        "near_zero_frac": 0.0,
+        "std": 0.048383
+      },
+      "heads.risk.bias": {
+        "abs_mean": 0.076935,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "heads.risk.weight": {
+        "abs_mean": 0.042757,
+        "near_zero_frac": 0.0,
+        "std": 0.050443
+      },
+      "heads.shared.0.bias": {
+        "abs_mean": 0.02646,
+        "near_zero_frac": 0.0,
+        "std": 0.029709
+      },
+      "heads.shared.0.weight": {
+        "abs_mean": 0.025544,
+        "near_zero_frac": 0.0,
+        "std": 0.029499
+      },
+      "heads.uncertainty_logit.bias": {
+        "abs_mean": 0.004228,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "heads.uncertainty_logit.weight": {
+        "abs_mean": 0.044893,
+        "near_zero_frac": 0.0,
+        "std": 0.05145
+      },
+      "heads.value.bias": {
+        "abs_mean": 0.051549,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "heads.value.weight": {
+        "abs_mean": 0.041961,
+        "near_zero_frac": 0.0,
+        "std": 0.049093
+      },
+      "heads.volatility.bias": {
+        "abs_mean": 0.064738,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "heads.volatility.weight": {
+        "abs_mean": 0.047603,
+        "near_zero_frac": 0.0,
+        "std": 0.054135
+      },
+      "memory.encoder.layers.0.linear1.bias": {
+        "abs_mean": 0.025563,
+        "near_zero_frac": 0.0,
+        "std": 0.029568
+      },
+      "memory.encoder.layers.0.linear1.weight": {
+        "abs_mean": 0.025519,
+        "near_zero_frac": 0.0,
+        "std": 0.029468
+      },
+      "memory.encoder.layers.0.linear2.bias": {
+        "abs_mean": 0.012915,
+        "near_zero_frac": 0.0,
+        "std": 0.014938
+      },
+      "memory.encoder.layers.0.linear2.weight": {
+        "abs_mean": 0.012754,
+        "near_zero_frac": 0.0,
+        "std": 0.01473
+      },
+      "memory.encoder.layers.0.norm1.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm1.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm2.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.norm2.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.in_proj_bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.in_proj_weight": {
+        "abs_mean": 0.031243,
+        "near_zero_frac": 0.0,
+        "std": 0.036069
+      },
+      "memory.encoder.layers.0.self_attn.out_proj.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.0.self_attn.out_proj.weight": {
+        "abs_mean": 0.025574,
+        "near_zero_frac": 0.0,
+        "std": 0.029503
+      },
+      "memory.encoder.layers.1.linear1.bias": {
+        "abs_mean": 0.025563,
+        "near_zero_frac": 0.0,
+        "std": 0.029568
+      },
+      "memory.encoder.layers.1.linear1.weight": {
+        "abs_mean": 0.025519,
+        "near_zero_frac": 0.0,
+        "std": 0.029468
+      },
+      "memory.encoder.layers.1.linear2.bias": {
+        "abs_mean": 0.012915,
+        "near_zero_frac": 0.0,
+        "std": 0.014938
+      },
+      "memory.encoder.layers.1.linear2.weight": {
+        "abs_mean": 0.012754,
+        "near_zero_frac": 0.0,
+        "std": 0.01473
+      },
+      "memory.encoder.layers.1.norm1.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm1.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm2.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.norm2.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.in_proj_bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.in_proj_weight": {
+        "abs_mean": 0.031243,
+        "near_zero_frac": 0.0,
+        "std": 0.036069
+      },
+      "memory.encoder.layers.1.self_attn.out_proj.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.1.self_attn.out_proj.weight": {
+        "abs_mean": 0.025574,
+        "near_zero_frac": 0.0,
+        "std": 0.029503
+      },
+      "memory.encoder.layers.2.linear1.bias": {
+        "abs_mean": 0.025563,
+        "near_zero_frac": 0.0,
+        "std": 0.029568
+      },
+      "memory.encoder.layers.2.linear1.weight": {
+        "abs_mean": 0.025519,
+        "near_zero_frac": 0.0,
+        "std": 0.029468
+      },
+      "memory.encoder.layers.2.linear2.bias": {
+        "abs_mean": 0.012915,
+        "near_zero_frac": 0.0,
+        "std": 0.014938
+      },
+      "memory.encoder.layers.2.linear2.weight": {
+        "abs_mean": 0.012754,
+        "near_zero_frac": 0.0,
+        "std": 0.01473
+      },
+      "memory.encoder.layers.2.norm1.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm1.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm2.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.norm2.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.in_proj_bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.in_proj_weight": {
+        "abs_mean": 0.031243,
+        "near_zero_frac": 0.0,
+        "std": 0.036069
+      },
+      "memory.encoder.layers.2.self_attn.out_proj.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.2.self_attn.out_proj.weight": {
+        "abs_mean": 0.025574,
+        "near_zero_frac": 0.0,
+        "std": 0.029503
+      },
+      "memory.encoder.layers.3.linear1.bias": {
+        "abs_mean": 0.025563,
+        "near_zero_frac": 0.0,
+        "std": 0.029568
+      },
+      "memory.encoder.layers.3.linear1.weight": {
+        "abs_mean": 0.025519,
+        "near_zero_frac": 0.0,
+        "std": 0.029468
+      },
+      "memory.encoder.layers.3.linear2.bias": {
+        "abs_mean": 0.012915,
+        "near_zero_frac": 0.0,
+        "std": 0.014938
+      },
+      "memory.encoder.layers.3.linear2.weight": {
+        "abs_mean": 0.012754,
+        "near_zero_frac": 0.0,
+        "std": 0.01473
+      },
+      "memory.encoder.layers.3.norm1.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm1.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm2.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.norm2.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.in_proj_bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.in_proj_weight": {
+        "abs_mean": 0.031243,
+        "near_zero_frac": 0.0,
+        "std": 0.036069
+      },
+      "memory.encoder.layers.3.self_attn.out_proj.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.encoder.layers.3.self_attn.out_proj.weight": {
+        "abs_mean": 0.025574,
+        "near_zero_frac": 0.0,
+        "std": 0.029503
+      },
+      "memory.norm.bias": {
+        "abs_mean": 0.0,
+        "near_zero_frac": 1.0,
+        "std": 0.0
+      },
+      "memory.norm.weight": {
+        "abs_mean": 1.0,
+        "near_zero_frac": 0.0,
+        "std": 0.0
+      },
+      "memory.pos.weight": {
+        "abs_mean": 0.796912,
+        "near_zero_frac": 0.0,
+        "std": 0.999888
+      },
+      "numeric.cls": {
+        "abs_mean": 0.19977,
+        "near_zero_frac": 0.0,
+        "std": 0.27186
+      },
+      "numeric.encoder.layers.0.linear1.bias": {
+        "abs_mean": 0.064033,
+        "near_zero_frac": 0.0,
+        "std": 0.050096
+      },
+      "numeric.encoder.layers.0.linear1.weight": {
+        "abs_mean": 0.055258,
+        "near_zero_frac": 0.0,
+        "std": 0.070663
+      },
+      "numeric.encoder.layers.0.linear2.bias": {
+        "abs_mean": 0.056561,
+        "near_zero_frac": 0.0,
+        "std": 0.141142
+      },
+      "numeric.encoder.layers.0.linear2.weight": {
+        "abs_mean": 0.048016,
+        "near_zero_frac": 0.0,
+        "std": 0.064717
+      },
+      "numeric.encoder.layers.0.norm1.bias": {
+        "abs_mean": 0.21796,
+        "near_zero_frac": 0.0,
+        "std": 0.242405
+      },
+      "numeric.encoder.layers.0.norm1.weight": {
+        "abs_mean": 0.535071,
+        "near_zero_frac": 0.0,
+        "std": 0.114462
+      },
+      "numeric.encoder.layers.0.norm2.bias": {
+        "abs_mean": 0.073269,
+        "near_zero_frac": 0.0,
+        "std": 0.092941
+      },
+      "numeric.encoder.layers.0.norm2.weight": {
+        "abs_mean": 0.721532,
+        "near_zero_frac": 0.0,
+        "std": 0.215585
+      },
+      "numeric.encoder.layers.0.self_attn.in_proj_bias": {
+        "abs_mean": 0.051483,
+        "near_zero_frac": 0.0,
+        "std": 0.109806
+      },
+      "numeric.encoder.layers.0.self_attn.in_proj_weight": {
+        "abs_mean": 0.039477,
+        "near_zero_frac": 0.0,
+        "std": 0.050359
+      },
+      "numeric.encoder.layers.0.self_attn.out_proj.bias": {
+        "abs_mean": 0.048447,
+        "near_zero_frac": 0.0,
+        "std": 0.123647
+      },
+      "numeric.encoder.layers.0.self_attn.out_proj.weight": {
+        "abs_mean": 0.024479,
+        "near_zero_frac": 0.0,
+        "std": 0.035229
+      },
+      "numeric.encoder.layers.1.linear1.bias": {
+        "abs_mean": 0.065749,
+        "near_zero_frac": 0.0,
+        "std": 0.038149
+      },
+      "numeric.encoder.layers.1.linear1.weight": {
+        "abs_mean": 0.063345,
+        "near_zero_frac": 0.0,
+        "std": 0.080055
+      },
+      "numeric.encoder.layers.1.linear2.bias": {
+        "abs_mean": 0.042735,
+        "near_zero_frac": 0.0,
+        "std": 0.102652
+      },
+      "numeric.encoder.layers.1.linear2.weight": {
+        "abs_mean": 0.052481,
+        "near_zero_frac": 0.0,
+        "std": 0.068185
+      },
+      "numeric.encoder.layers.1.norm1.bias": {
+        "abs_mean": 0.112623,
+        "near_zero_frac": 0.0,
+        "std": 0.144587
+      },
+      "numeric.encoder.layers.1.norm1.weight": {
+        "abs_mean": 0.658656,
+        "near_zero_frac": 0.0,
+        "std": 0.193642
+      },
+      "numeric.encoder.layers.1.norm2.bias": {
+        "abs_mean": 0.075109,
+        "near_zero_frac": 0.0,
+        "std": 0.09934
+      },
+      "numeric.encoder.layers.1.norm2.weight": {
+        "abs_mean": 0.93667,
+        "near_zero_frac": 0.0,
+        "std": 0.165087
+      },
+      "numeric.encoder.layers.1.self_attn.in_proj_bias": {
+        "abs_mean": 0.034806,
+        "near_zero_frac": 0.0,
+        "std": 0.06159
+      },
+      "numeric.encoder.layers.1.self_attn.in_proj_weight": {
+        "abs_mean": 0.052911,
+        "near_zero_frac": 0.0,
+        "std": 0.06815
+      },
+      "numeric.encoder.layers.1.self_attn.out_proj.bias": {
+        "abs_mean": 0.055365,
+        "near_zero_frac": 0.0,
+        "std": 0.095455
+      },
+      "numeric.encoder.layers.1.self_attn.out_proj.weight": {
+        "abs_mean": 0.045616,
+        "near_zero_frac": 0.0,
+        "std": 0.058517
+      },
+      "numeric.encoder.layers.2.linear1.bias": {
+        "abs_mean": 0.066934,
+        "near_zero_frac": 0.0,
+        "std": 0.037906
+      },
+      "numeric.encoder.layers.2.linear1.weight": {
+        "abs_mean": 0.066508,
+        "near_zero_frac": 0.0,
+        "std": 0.083801
+      },
+      "numeric.encoder.layers.2.linear2.bias": {
+        "abs_mean": 0.043555,
+        "near_zero_frac": 0.0,
+        "std": 0.094265
+      },
+      "numeric.encoder.layers.2.linear2.weight": {
+        "abs_mean": 0.06248,
+        "near_zero_frac": 0.0,
+        "std": 0.079716
+      },
+      "numeric.encoder.layers.2.norm1.bias": {
+        "abs_mean": 0.080014,
+        "near_zero_frac": 0.0,
+        "std": 0.12009
+      },
+      "numeric.encoder.layers.2.norm1.weight": {
+        "abs_mean": 0.702559,
+        "near_zero_frac": 0.0,
+        "std": 0.159407
+      },
+      "numeric.encoder.layers.2.norm2.bias": {
+        "abs_mean": 0.101539,
+        "near_zero_frac": 0.0,
+        "std": 0.125525
+      },
+      "numeric.encoder.layers.2.norm2.weight": {
+        "abs_mean": 1.029815,
+        "near_zero_frac": 0.0,
+        "std": 0.171765
+      },
+      "numeric.encoder.layers.2.self_attn.in_proj_bias": {
+        "abs_mean": 0.027634,
+        "near_zero_frac": 0.0,
+        "std": 0.045064
+      },
+      "numeric.encoder.layers.2.self_attn.in_proj_weight": {
+        "abs_mean": 0.054314,
+        "near_zero_frac": 0.0,
+        "std": 0.069251
+      },
+      "numeric.encoder.layers.2.self_attn.out_proj.bias": {
+        "abs_mean": 0.052326,
+        "near_zero_frac": 0.0,
+        "std": 0.078691
+      },
+      "numeric.encoder.layers.2.self_attn.out_proj.weight": {
+        "abs_mean": 0.051756,
+        "near_zero_frac": 0.0,
+        "std": 0.065352
+      },
+      "numeric.encoder.layers.3.linear1.bias": {
+        "abs_mean": 0.069621,
+        "near_zero_frac": 0.0,
+        "std": 0.047851
+      },
+      "numeric.encoder.layers.3.linear1.weight": {
+        "abs_mean": 0.068256,
+        "near_zero_frac": 0.0,
+        "std": 0.086388
+      },
+      "numeric.encoder.layers.3.linear2.bias": {
+        "abs_mean": 0.034747,
+        "near_zero_frac": 0.0,
+        "std": 0.0864
+      },
+      "numeric.encoder.layers.3.linear2.weight": {
+        "abs_mean": 0.067123,
+        "near_zero_frac": 0.0,
+        "std": 0.092772
+      },
+      "numeric.encoder.layers.3.norm1.bias": {
+        "abs_mean": 0.06907,
+        "near_zero_frac": 0.0,
+        "std": 0.11975
+      },
+      "numeric.encoder.layers.3.norm1.weight": {
+        "abs_mean": 0.747994,
+        "near_zero_frac": 0.0,
+        "std": 0.114775
+      },
+      "numeric.encoder.layers.3.norm2.bias": {
+        "abs_mean": 0.093122,
+        "near_zero_frac": 0.0,
+        "std": 0.115357
+      },
+      "numeric.encoder.layers.3.norm2.weight": {
+        "abs_mean": 1.07971,
+        "near_zero_frac": 0.0,
+        "std": 0.179654
+      },
+      "numeric.encoder.layers.3.self_attn.in_proj_bias": {
+        "abs_mean": 0.019436,
+        "near_zero_frac": 0.0,
+        "std": 0.030501
+      },
+      "numeric.encoder.layers.3.self_attn.in_proj_weight": {
+        "abs_mean": 0.056157,
+        "near_zero_frac": 0.0,
+        "std": 0.071116
+      },
+      "numeric.encoder.layers.3.self_attn.out_proj.bias": {
+        "abs_mean": 0.050744,
+        "near_zero_frac": 0.0,
+        "std": 0.079729
+      },
+      "numeric.encoder.layers.3.self_attn.out_proj.weight": {
+        "abs_mean": 0.051926,
+        "near_zero_frac": 0.0,
+        "std": 0.067271
+      },
+      "numeric.norm.bias": {
+        "abs_mean": 0.063337,
+        "near_zero_frac": 0.0,
+        "std": 0.115837
+      },
+      "numeric.norm.weight": {
+        "abs_mean": 0.918732,
+        "near_zero_frac": 0.0,
+        "std": 0.170957
+      },
+      "numeric.out_proj.bias": {
+        "abs_mean": 0.039026,
+        "near_zero_frac": 0.0,
+        "std": 0.047492
+      },
+      "numeric.out_proj.weight": {
+        "abs_mean": 0.062162,
+        "near_zero_frac": 0.0,
+        "std": 0.078039
+      },
+      "numeric.patch_proj.bias": {
+        "abs_mean": 0.079997,
+        "near_zero_frac": 0.0,
+        "std": 0.116947
+      },
+      "numeric.patch_proj.weight": {
+        "abs_mean": 0.084193,
+        "near_zero_frac": 0.0,
+        "std": 0.109063
+      },
+      "vision.encoder.layers.0.linear1.bias": {
+        "abs_mean": 0.051101,
+        "near_zero_frac": 0.0,
+        "std": 0.039147
+      },
+      "vision.encoder.layers.0.linear1.weight": {
+        "abs_mean": 0.040089,
+        "near_zero_frac": 0.0,
+        "std": 0.050154
+      },
+      "vision.encoder.layers.0.linear2.bias": {
+        "abs_mean": 0.021905,
+        "near_zero_frac": 0.0,
+        "std": 0.03416
+      },
+      "vision.encoder.layers.0.linear2.weight": {
+        "abs_mean": 0.032215,
+        "near_zero_frac": 0.0,
+        "std": 0.041124
+      },
+      "vision.encoder.layers.0.norm1.bias": {
+        "abs_mean": 0.104139,
+        "near_zero_frac": 0.0,
+        "std": 0.126832
+      },
+      "vision.encoder.layers.0.norm1.weight": {
+        "abs_mean": 0.856929,
+        "near_zero_frac": 0.0,
+        "std": 0.088703
+      },
+      "vision.encoder.layers.0.norm2.bias": {
+        "abs_mean": 0.02984,
+        "near_zero_frac": 0.0,
+        "std": 0.037039
+      },
+      "vision.encoder.layers.0.norm2.weight": {
+        "abs_mean": 0.933644,
+        "near_zero_frac": 0.0,
+        "std": 0.061876
+      },
+      "vision.encoder.layers.0.self_attn.in_proj_bias": {
+        "abs_mean": 0.010352,
+        "near_zero_frac": 0.0009,
+        "std": 0.016439
+      },
+      "vision.encoder.layers.0.self_attn.in_proj_weight": {
+        "abs_mean": 0.037452,
+        "near_zero_frac": 0.0,
+        "std": 0.046704
+      },
+      "vision.encoder.layers.0.self_attn.out_proj.bias": {
+        "abs_mean": 0.02385,
+        "near_zero_frac": 0.0,
+        "std": 0.036975
+      },
+      "vision.encoder.layers.0.self_attn.out_proj.weight": {
+        "abs_mean": 0.04121,
+        "near_zero_frac": 0.0,
+        "std": 0.052179
+      },
+      "vision.encoder.layers.1.linear1.bias": {
+        "abs_mean": 0.047616,
+        "near_zero_frac": 0.0,
+        "std": 0.034417
+      },
+      "vision.encoder.layers.1.linear1.weight": {
+        "abs_mean": 0.041816,
+        "near_zero_frac": 0.0,
+        "std": 0.052264
+      },
+      "vision.encoder.layers.1.linear2.bias": {
+        "abs_mean": 0.024497,
+        "near_zero_frac": 0.0,
+        "std": 0.034111
+      },
+      "vision.encoder.layers.1.linear2.weight": {
+        "abs_mean": 0.034651,
+        "near_zero_frac": 0.0,
+        "std": 0.043902
+      },
+      "vision.encoder.layers.1.norm1.bias": {
+        "abs_mean": 0.057583,
+        "near_zero_frac": 0.0,
+        "std": 0.086954
+      },
+      "vision.encoder.layers.1.norm1.weight": {
+        "abs_mean": 0.851993,
+        "near_zero_frac": 0.0,
+        "std": 0.075017
+      },
+      "vision.encoder.layers.1.norm2.bias": {
+        "abs_mean": 0.036119,
+        "near_zero_frac": 0.0,
+        "std": 0.045947
+      },
+      "vision.encoder.layers.1.norm2.weight": {
+        "abs_mean": 0.948257,
+        "near_zero_frac": 0.0,
+        "std": 0.06326
+      },
+      "vision.encoder.layers.1.self_attn.in_proj_bias": {
+        "abs_mean": 0.009776,
+        "near_zero_frac": 0.0,
+        "std": 0.016173
+      },
+      "vision.encoder.layers.1.self_attn.in_proj_weight": {
+        "abs_mean": 0.039767,
+        "near_zero_frac": 0.0,
+        "std": 0.049119
+      },
+      "vision.encoder.layers.1.self_attn.out_proj.bias": {
+        "abs_mean": 0.01767,
+        "near_zero_frac": 0.0,
+        "std": 0.026694
+      },
+      "vision.encoder.layers.1.self_attn.out_proj.weight": {
+        "abs_mean": 0.03979,
+        "near_zero_frac": 0.0,
+        "std": 0.049482
+      },
+      "vision.encoder.layers.2.linear1.bias": {
+        "abs_mean": 0.050446,
+        "near_zero_frac": 0.0,
+        "std": 0.037554
+      },
+      "vision.encoder.layers.2.linear1.weight": {
+        "abs_mean": 0.041823,
+        "near_zero_frac": 0.0,
+        "std": 0.052278
+      },
+      "vision.encoder.layers.2.linear2.bias": {
+        "abs_mean": 0.023636,
+        "near_zero_frac": 0.0,
+        "std": 0.030577
+      },
+      "vision.encoder.layers.2.linear2.weight": {
+        "abs_mean": 0.034295,
+        "near_zero_frac": 0.0,
+        "std": 0.043416
+      },
+      "vision.encoder.layers.2.norm1.bias": {
+        "abs_mean": 0.050875,
+        "near_zero_frac": 0.0,
+        "std": 0.078748
+      },
+      "vision.encoder.layers.2.norm1.weight": {
+        "abs_mean": 0.870136,
+        "near_zero_frac": 0.0,
+        "std": 0.072079
+      },
+      "vision.encoder.layers.2.norm2.bias": {
+        "abs_mean": 0.059,
+        "near_zero_frac": 0.0,
+        "std": 0.069717
+      },
+      "vision.encoder.layers.2.norm2.weight": {
+        "abs_mean": 0.931389,
+        "near_zero_frac": 0.0,
+        "std": 0.064917
+      },
+      "vision.encoder.layers.2.self_attn.in_proj_bias": {
+        "abs_mean": 0.0124,
+        "near_zero_frac": 0.0009,
+        "std": 0.02092
+      },
+      "vision.encoder.layers.2.self_attn.in_proj_weight": {
+        "abs_mean": 0.041256,
+        "near_zero_frac": 0.0,
+        "std": 0.051071
+      },
+      "vision.encoder.layers.2.self_attn.out_proj.bias": {
+        "abs_mean": 0.018775,
+        "near_zero_frac": 0.0,
+        "std": 0.024797
+      },
+      "vision.encoder.layers.2.self_attn.out_proj.weight": {
+        "abs_mean": 0.040232,
+        "near_zero_frac": 0.0,
+        "std": 0.050385
+      },
+      "vision.encoder.layers.3.linear1.bias": {
+        "abs_mean": 0.044776,
+        "near_zero_frac": 0.0,
+        "std": 0.041042
+      },
+      "vision.encoder.layers.3.linear1.weight": {
+        "abs_mean": 0.042821,
+        "near_zero_frac": 0.0,
+        "std": 0.053742
+      },
+      "vision.encoder.layers.3.linear2.bias": {
+        "abs_mean": 0.022344,
+        "near_zero_frac": 0.0,
+        "std": 0.029513
+      },
+      "vision.encoder.layers.3.linear2.weight": {
+        "abs_mean": 0.036909,
+        "near_zero_frac": 0.0,
+        "std": 0.046835
+      },
+      "vision.encoder.layers.3.norm1.bias": {
+        "abs_mean": 0.048586,
+        "near_zero_frac": 0.0,
+        "std": 0.079189
+      },
+      "vision.encoder.layers.3.norm1.weight": {
+        "abs_mean": 0.880765,
+        "near_zero_frac": 0.0,
+        "std": 0.069727
+      },
+      "vision.encoder.layers.3.norm2.bias": {
+        "abs_mean": 0.045719,
+        "near_zero_frac": 0.0,
+        "std": 0.055033
+      },
+      "vision.encoder.layers.3.norm2.weight": {
+        "abs_mean": 0.945698,
+        "near_zero_frac": 0.0,
+        "std": 0.08036
+      },
+      "vision.encoder.layers.3.self_attn.in_proj_bias": {
+        "abs_mean": 0.012005,
+        "near_zero_frac": 0.0,
+        "std": 0.019462
+      },
+      "vision.encoder.layers.3.self_attn.in_proj_weight": {
+        "abs_mean": 0.041766,
+        "near_zero_frac": 0.0,
+        "std": 0.051727
+      },
+      "vision.encoder.layers.3.self_attn.out_proj.bias": {
+        "abs_mean": 0.016139,
+        "near_zero_frac": 0.0,
+        "std": 0.02156
+      },
+      "vision.encoder.layers.3.self_attn.out_proj.weight": {
+        "abs_mean": 0.038099,
+        "near_zero_frac": 0.0,
+        "std": 0.047613
+      },
+      "vision.freq_proj.bias": {
+        "abs_mean": 0.129518,
+        "near_zero_frac": 0.0,
+        "std": 0.149494
+      },
+      "vision.freq_proj.weight": {
+        "abs_mean": 0.361399,
+        "near_zero_frac": 0.0,
+        "std": 0.474662
+      },
+      "vision.merge.bias": {
+        "abs_mean": 0.047115,
+        "near_zero_frac": 0.0,
+        "std": 0.061444
+      },
+      "vision.merge.weight": {
+        "abs_mean": 0.033927,
+        "near_zero_frac": 0.0,
+        "std": 0.04416
+      },
+      "vision.norm.bias": {
+        "abs_mean": 0.025594,
+        "near_zero_frac": 0.0,
+        "std": 0.03482
+      },
+      "vision.norm.weight": {
+        "abs_mean": 0.978862,
+        "near_zero_frac": 0.0,
+        "std": 0.048219
+      },
+      "vision.out_proj.bias": {
+        "abs_mean": 0.02685,
+        "near_zero_frac": 0.0,
+        "std": 0.031353
+      },
+      "vision.out_proj.weight": {
+        "abs_mean": 0.040224,
+        "near_zero_frac": 0.0,
+        "std": 0.049922
+      },
+      "vision.proj_price.weight": {
+        "abs_mean": 0.035684,
+        "near_zero_frac": 0.0,
+        "std": 0.043828
+      },
+      "vision.proj_vol.weight": {
+        "abs_mean": 0.061728,
+        "near_zero_frac": 0.0,
+        "std": 0.074968
+      },
+      "vision.query": {
+        "abs_mean": 0.111065,
+        "near_zero_frac": 0.0,
+        "std": 0.135872
+      }
+    },
+    "total_params": 29138645
+  }
+}

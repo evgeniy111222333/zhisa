@@ -1,0 +1,41 @@
+{
+  "b1_ok": false,
+  "b1_recency": {
+    "ang_early": 0.2888,
+    "ang_last": 0.2421
+  },
+  "b2_candle_flip": {
+    "ang_flip": 0.3594
+  },
+  "b2_ok": true,
+  "b3_future_lookup": {
+    "mean_rank": 0.0,
+    "median_rank": 0,
+    "n": 24,
+    "top1_acc": 1.0
+  },
+  "b3_ok": true,
+  "b4_instrument_probe": {
+    "1nn_acc": 0.0417,
+    "between_group_cos": 0.9962
+  },
+  "b4_ok": false,
+  "b5_nn_locality": {
+    "median_abs_dt_bars": 4,
+    "median_margin": 0.0,
+    "p75_abs_dt_bars": 4
+  },
+  "b5_ok": true,
+  "b6_no_collapse": {
+    "norm_var_frac": 0.0028,
+    "pairwise_cos_max_offdiag": 0.99964,
+    "pairwise_cos_mean": 0.99634
+  },
+  "b6_ok": false,
+  "b8_determinism": {
+    "max_delta": 0.0
+  },
+  "b8_ok": true,
+  "s1_behavior_pass": 4,
+  "s1_behavior_total": 7
+}

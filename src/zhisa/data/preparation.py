@@ -309,9 +309,19 @@ def _align_coverage(
 
     user_start = pd.Timestamp(policy.start) if policy.start else None
     user_end = pd.Timestamp(policy.end) if policy.end else None
+    if user_start is not None and user_start.tzinfo is None:
+        user_start = user_start.tz_localize("UTC")
+    if user_end is not None and user_end.tzinfo is None:
+        user_end = user_end.tz_localize("UTC")
 
-    final_start = max(auto_start, user_start) if user_start else auto_start
-    final_end = min(auto_end, user_end) if user_end else auto_end
+    # An explicit start/end is a hard bound on the OUTPUT window (each symbol
+    # is still clipped to its own data below). The default ``None`` keeps the
+    # shared auto-window. This lets a run keep DEEP history for old symbols
+    # (e.g. ``--coverage-start 2020-10-01``) while late-listed symbols simply
+    # contribute from their own listing date instead of dragging everyone to a
+    # shallow union window.
+    final_start = user_start if user_start is not None else auto_start
+    final_end = user_end if user_end is not None else auto_end
     if final_start >= final_end:
         raise ValueError(
             f"coverage window empty: start={final_start}, end={final_end}"

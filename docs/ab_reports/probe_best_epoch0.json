@@ -1,0 +1,45 @@
+{
+  "alignment": {
+    "mean_cos_vision_numeric": -0.0025697059463709593
+  },
+  "checkpoint": "/data/out/phase1_heavy_best.pt",
+  "direction_probe": {
+    "balanced": {
+      "-1": 0.35396984924623115,
+      "0": 0.5787106446776612,
+      "1": 0.3909991742361685
+    },
+    "majority_baseline": 0.6169394841269841,
+    "n_test": 8064,
+    "n_train": 11936
+  },
+  "embedding_norm_mean": 21.053871154785156,
+  "embedding_std": 1.073677897453308,
+  "finite": true,
+  "instrument_separation": {
+    "centroid_cos_offdiag_mean": -0.3308883011341095,
+    "silhouette": 0.14011089503765106,
+    "within_similarity_mean": -0.00010465549678356518
+  },
+  "label_balance": {
+    "direction_counts": [
+      12323,
+      1643,
+      6034
+    ],
+    "regime_counts": [
+      10163,
+      6596,
+      2072,
+      1169
+    ]
+  },
+  "n_samples": 20000,
+  "n_symbols": 4,
+  "regime_silhouette": -0.007277482654899359,
+  "temporal_cpc": {
+    "mean_cos_negative": 0.06170874461531639,
+    "mean_cos_positive": 0.9077648520469666,
+    "separation": 0.8460560441017151
+  }
+}

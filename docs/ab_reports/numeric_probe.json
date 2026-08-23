@@ -1,0 +1,190 @@
+{
+  "best": {
+    "model_config": {
+      "embed_dim": 384,
+      "vision_mode": null,
+      "numeric_layers": 4,
+      "n_instruments": 12
+    },
+    "channels": 32,
+    "summary_channel_noise": {
+      "cos_mean": 1.0,
+      "cos_std": 0.0,
+      "angle_deg_mean": 0.131,
+      "random_twin_cos_mean": 1.0,
+      "random_twin_angle_deg_mean": 0.079
+    },
+    "mult_1pct": {
+      "mult_1pct": {
+        "cos": 0.99999,
+        "angle_deg": 0.152,
+        "l2": 0.03329,
+        "rel_l2": 0.00268
+      },
+      "mult_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.127,
+        "l2": 0.02543,
+        "rel_l2": 0.00222
+      }
+    },
+    "add_channel_1pct": {
+      "add_channel_1pct": {
+        "cos": 1.0,
+        "angle_deg": 0.132,
+        "l2": 0.02878,
+        "rel_l2": 0.00231
+      },
+      "add_channel_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.076,
+        "l2": 0.01524,
+        "rel_l2": 0.00133
+      }
+    },
+    "add_token_wise_1pct": {
+      "add_token_wise_1pct": {
+        "cos": 1.0,
+        "angle_deg": 0.129,
+        "l2": 0.02813,
+        "rel_l2": 0.00226
+      },
+      "add_token_wise_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.076,
+        "l2": 0.01528,
+        "rel_l2": 0.00133
+      }
+    },
+    "worst_5_channels": [
+      {
+        "channel": 9,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 17,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 28,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 4,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 19,
+        "cos_after_1pct": 1.0
+      }
+    ],
+    "jitter_avg_K8": {
+      "jitter_avg_K8_vs_clean": {
+        "cos": 1.0,
+        "angle_deg": 0.045,
+        "l2": 0.01021,
+        "rel_l2": 0.00082
+      },
+      "single_noisy_vs_clean": {
+        "cos": 1.0,
+        "angle_deg": 0.129,
+        "l2": 0.02813,
+        "rel_l2": 0.00226
+      }
+    }
+  },
+  "warm_v2": {
+    "model_config": {
+      "embed_dim": 384,
+      "vision_mode": "columnformer",
+      "numeric_layers": 4,
+      "n_instruments": 12
+    },
+    "channels": 32,
+    "summary_channel_noise": {
+      "cos_mean": 0.99999,
+      "cos_std": 0.0,
+      "angle_deg_mean": 0.168,
+      "random_twin_cos_mean": 1.0,
+      "random_twin_angle_deg_mean": 0.029
+    },
+    "mult_1pct": {
+      "mult_1pct": {
+        "cos": 0.99999,
+        "angle_deg": 0.2,
+        "l2": 0.03328,
+        "rel_l2": 0.00351
+      },
+      "mult_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.042,
+        "l2": 0.00736,
+        "rel_l2": 0.00075
+      }
+    },
+    "add_channel_1pct": {
+      "add_channel_1pct": {
+        "cos": 0.99999,
+        "angle_deg": 0.172,
+        "l2": 0.02868,
+        "rel_l2": 0.00302
+      },
+      "add_channel_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.029,
+        "l2": 0.00517,
+        "rel_l2": 0.00053
+      }
+    },
+    "add_token_wise_1pct": {
+      "add_token_wise_1pct": {
+        "cos": 0.99999,
+        "angle_deg": 0.173,
+        "l2": 0.02886,
+        "rel_l2": 0.00304
+      },
+      "add_token_wise_1pct_random_twin": {
+        "cos": 1.0,
+        "angle_deg": 0.029,
+        "l2": 0.00509,
+        "rel_l2": 0.00052
+      }
+    },
+    "worst_5_channels": [
+      {
+        "channel": 4,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 20,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 19,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 21,
+        "cos_after_1pct": 1.0
+      },
+      {
+        "channel": 9,
+        "cos_after_1pct": 1.0
+      }
+    ],
+    "jitter_avg_K8": {
+      "jitter_avg_K8_vs_clean": {
+        "cos": 1.0,
+        "angle_deg": 0.062,
+        "l2": 0.01049,
+        "rel_l2": 0.0011
+      },
+      "single_noisy_vs_clean": {
+        "cos": 0.99999,
+        "angle_deg": 0.173,
+        "l2": 0.02886,
+        "rel_l2": 0.00304
+      }
+    }
+  }
+}

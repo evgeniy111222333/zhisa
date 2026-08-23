@@ -1,0 +1,136 @@
+{
+  "device": "cpu",
+  "steps": 120,
+  "variants": {
+    "base": {
+      "curve": [
+        {
+          "step": 20,
+          "top1": 0.0156,
+          "pos_cos": 0.1191,
+          "temporal_loss": 3.4192
+        },
+        {
+          "step": 40,
+          "top1": 0.1719,
+          "pos_cos": 0.6454,
+          "temporal_loss": 2.6523
+        },
+        {
+          "step": 60,
+          "top1": 0.2344,
+          "pos_cos": 0.6782,
+          "temporal_loss": 2.2897
+        },
+        {
+          "step": 80,
+          "top1": 0.2812,
+          "pos_cos": 0.6053,
+          "temporal_loss": 2.126
+        },
+        {
+          "step": 100,
+          "top1": 0.2969,
+          "pos_cos": 0.5185,
+          "temporal_loss": 2.0674
+        },
+        {
+          "step": 120,
+          "top1": 0.4219,
+          "pos_cos": 0.4759,
+          "temporal_loss": 1.7978
+        }
+      ],
+      "steps_done": 120,
+      "mean_step_s": 4.879,
+      "bank_size": 0
+    },
+    "bank": {
+      "curve": [
+        {
+          "step": 20,
+          "top1": 0.0156,
+          "pos_cos": -0.0292,
+          "temporal_loss": 3.4683
+        },
+        {
+          "step": 40,
+          "top1": 0.1406,
+          "pos_cos": 0.2775,
+          "temporal_loss": 3.069
+        },
+        {
+          "step": 60,
+          "top1": 0.2031,
+          "pos_cos": 0.5479,
+          "temporal_loss": 2.2955
+        },
+        {
+          "step": 80,
+          "top1": 0.25,
+          "pos_cos": 0.5415,
+          "temporal_loss": 4.9115
+        },
+        {
+          "step": 100,
+          "top1": 0.3281,
+          "pos_cos": 0.4265,
+          "temporal_loss": 4.8654
+        },
+        {
+          "step": 120,
+          "top1": 0.3438,
+          "pos_cos": 0.3262,
+          "temporal_loss": 5.0802
+        }
+      ],
+      "steps_done": 120,
+      "mean_step_s": 4.92,
+      "bank_size": 1024
+    },
+    "hard": {
+      "curve": [
+        {
+          "step": 20,
+          "top1": 0.0156,
+          "pos_cos": 0.0606,
+          "temporal_loss": 4.4595
+        },
+        {
+          "step": 40,
+          "top1": 0.0625,
+          "pos_cos": 0.108,
+          "temporal_loss": 4.2745
+        },
+        {
+          "step": 60,
+          "top1": 0.125,
+          "pos_cos": 0.5921,
+          "temporal_loss": 4.0177
+        },
+        {
+          "step": 80,
+          "top1": 0.1406,
+          "pos_cos": 0.5277,
+          "temporal_loss": 5.6029
+        },
+        {
+          "step": 100,
+          "top1": 0.1875,
+          "pos_cos": 0.3038,
+          "temporal_loss": 5.5755
+        },
+        {
+          "step": 120,
+          "top1": 0.2344,
+          "pos_cos": 0.2431,
+          "temporal_loss": 5.5009
+        }
+      ],
+      "steps_done": 120,
+      "mean_step_s": 7.472,
+      "bank_size": 1024
+    }
+  },
+  "status": "partial"
+}
