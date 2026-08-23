@@ -81,6 +81,12 @@ def _ssl_config_from(cfg) -> SSLConfig:
         weight_trunk_align=float(s.get("weight_trunk_align", 0.0)),
         trunk_align_momentum=float(s.get("trunk_align_momentum", 0.0)),
         instrument_contrast_w=float(s.get("instrument_contrast_w", 0.0)),
+        recon_depth=int(s.get("recon_depth", 1)),
+        recon_use_norm=bool(s.get("recon_use_norm", True)),
+        recon_use_gain=bool(s.get("recon_use_gain", False)),
+        masked_target_norm=bool(s.get("masked_target_norm", False)),
+        vision_grad_scale=float(s.get("vision_grad_scale", 1.0)),
+        instrument_z_contrast_w=float(s.get("instrument_z_contrast_w", 0.0)),
         augment_transforms=tuple(
             str(x) for x in (s.get("augment_transforms", []) or [])
         ),

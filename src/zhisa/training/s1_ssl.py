@@ -120,6 +120,29 @@ class SSLConfig:
     # ``context.instrument_emb`` so symbols stop colliding (measured pairs
     # at 0.44-0.56 with silhouette 0.007). 0.0 disables.
     instrument_contrast_w: float = 0.0
+    # ---- Reconstruction upgrade (P1, evidence-gated) -------------------------
+    # The masked reconstructor on heavy checkpoints collapses to *shrinkage*:
+    # linear fit pred~0.28*target (corr 0.60) -> gain stuck ~1.2-1.4 vs 2.0+.
+    # Fixes (all opt-in, default = canonical behaviour):
+    #   * recon_depth>1 : deeper residual MLP head (capacity -> higher corr);
+    #   * recon_use_gain: learnable per-feature output scale (init 1) that lets
+    #     the head calibrate raw amplitude instead of shrinking toward the mean;
+    #   * masked_target_norm: train in per-feature standardized space so the
+    #     loss is not dominated by a few large-variance channels.
+    recon_depth: int = 1
+    recon_use_norm: bool = True
+    recon_use_gain: bool = False
+    masked_target_norm: bool = False
+    # ---- Gradient rebalance (P2) ---------------------------------------------
+    # vision.* grads are scaled by this factor AFTER backward (measured: vision
+    # gets ~2% of grad while numeric gets ~40% -> z is numeric-dominated, which
+    # drives both the numeric-perturb angle and the recon weakness). 1.0 = off.
+    vision_grad_scale: float = 1.0
+    # ---- z-level instrument contrast (P3) ------------------------------------
+    # InfoNCE on the TRUNK embedding z keyed by instrument identity: forces the
+    # *encoded* embedding (not just the instrument_emb table) to separate
+    # symbols. Measured: flipping id moves z by ~5 deg, hence silhouette ~0.
+    instrument_z_contrast_w: float = 0.0
     # ---- Temporal CPC v2 (negatives engineering, all train-only). ----
     # MoCo-style memory bank of L2-normalised teacher target projections.
     # 0 disables the bank (canonical v1 behaviour: in-batch negatives only).
@@ -256,20 +279,56 @@ class _MaskedReconstructor(nn.Module):
     """Predicts the original patch contents from the encoder's outputs.
 
     The numeric encoder produces a sequence of tokens (CLS + patches).
-    We attach a small linear head that maps each token back to the
-    flattened patch values. Only the masked positions contribute to
-    the loss.
+    We attach a head that maps each token back to the flattened patch
+    values. Only the masked positions contribute to the loss.
+
+    ``depth=1, use_gain=False`` reproduces the canonical single-Linear head
+    exactly (state-dict compatible). ``depth>1`` adds residual MLP blocks,
+    and ``use_gain=True`` adds a learnable per-feature output scale (init 1)
+    that lets the head calibrate raw amplitude instead of shrinking toward
+    zero (measured slope ~0.28 / corr ~0.60 in heavy checkpoints).
     """
 
-    def __init__(self, d_model: int, patch_size: int, in_features: int) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        patch_size: int,
+        in_features: int,
+        *,
+        depth: int = 1,
+        use_residual_norm: bool = True,
+        use_gain: bool = False,
+        gain_init: float = 1.0,
+    ) -> None:
         super().__init__()
         self.patch_size = patch_size
         self.in_features = in_features
-        self.head = nn.Linear(d_model, patch_size * in_features)
+        self.depth = int(depth)
+        self.use_gain = bool(use_gain)
+        blocks = []
+        prev = d_model
+        for _ in range(max(0, int(depth) - 1)):
+            blocks.append(nn.Linear(prev, d_model))
+            if use_residual_norm:
+                blocks.append(nn.LayerNorm(d_model))
+            blocks.append(nn.GELU())
+            prev = d_model
+        self.net = nn.Sequential(*blocks) if blocks else nn.Identity()
+        self.head = nn.Linear(prev, patch_size * in_features)
+        if self.use_gain:
+            self.gain = nn.Parameter(
+                torch.full((patch_size * in_features,), float(gain_init))
+            )
+        else:
+            self.register_parameter("gain", None)
 
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         # tokens: (B, 1 + n_patches, d_model)
-        return self.head(tokens)
+        out = self.net(tokens)
+        out = self.head(out)
+        if self.gain is not None:
+            out = out * self.gain
+        return out
 
 
 class EMATeacher:
@@ -365,12 +424,22 @@ def masked_numeric_loss(
     reconstructor: _MaskedReconstructor,
     x: torch.Tensor,
     mask_ratio: float = 0.4,
+    *,
+    target_norm: bool = False,
+    target_mean: Optional[torch.Tensor] = None,
+    target_scale: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """Mask random patches of the numeric input, encode, and predict them.
 
     The numeric encoder is :class:`zhisa.models.encoders.numeric.NumericEncoder`
     which returns ``(cls, tokens)`` of shape ``(B, 1+n_patches, d_model)``.
     Only the non-CLS positions are considered for masking.
+
+    ``target_norm=True`` standardizes patch targets per feature channel using
+    the batch stats (or the caller-provided ``target_mean``/``target_scale``).
+    This removes the amplitude bias that dominates the raw MSE (a few
+    large-variance channels) and is the training-side half of the anti-shrinkage
+    fix — the reconstruction head then optimises correlation, not raw scale.
     """
     B, T, F_ = x.shape
     cfg = numeric_encoder.cfg
@@ -412,6 +481,15 @@ def masked_numeric_loss(
     else:
         pred_patches = pred[:, 1:, :]
     target = patches.view(B, n_patches, -1)
+    if target_norm:
+        if target_mean is None or target_scale is None:
+            tm = target.mean(dim=(0, 1), keepdim=True)
+            ts = target.std(dim=(0, 1), keepdim=True).clamp_min(1e-3) + 1e-6
+        else:
+            tm = target_mean.to(x.device)
+            ts = target_scale.to(x.device)
+        pred_patches = (pred_patches - tm) / ts
+        target = (target - tm) / ts
     # MSE only on masked positions.
     loss_per_patch = (pred_patches - target).pow(2).mean(dim=-1)  # (B, n_patches)
     masked_positions = mask < 0.5
@@ -460,6 +538,9 @@ class SSLPretrainer:
             d_model=model.numeric.cfg.d_model,
             patch_size=model.numeric.cfg.patch_size,
             in_features=model.numeric.cfg.in_features,
+            depth=int(self.cfg.recon_depth),
+            use_residual_norm=bool(self.cfg.recon_use_norm),
+            use_gain=bool(self.cfg.recon_use_gain),
         )
 
         self.proj_temporal.to(self.device)
@@ -767,7 +848,8 @@ class SSLPretrainer:
         # --- 3) Masked numeric modeling -----------------------------------
         if self.cfg.use_masked_modeling:
             losses["masked"] = masked_numeric_loss(
-                self.model.numeric, self.reconstructor, numeric, self.cfg.mask_ratio
+                self.model.numeric, self.reconstructor, numeric, self.cfg.mask_ratio,
+                target_norm=bool(self.cfg.masked_target_norm),
             )
 
         # --- 3b) Instrument-embedding spread (fixes symbol collisions) ----
@@ -782,6 +864,26 @@ class SSLPretrainer:
                     self.cfg.instrument_contrast_w * off[mask_off].mean()
                 )
 
+        # --- 3c) z-level instrument contrast (P3) -------------------------
+        # InfoNCE on the TRUNK embedding z keyed by instrument identity so the
+        # ENCODED representation separates symbols (the embedding-table loss
+        # above leaves z only ~5 deg separated, hence silhouette ~0.008).
+        if self.cfg.instrument_z_contrast_w > 0.0:
+            ids = batch.get("instrument_id")
+            if ids is not None and ids.numel() > 1 and torch.unique(ids).numel() > 1:
+                with torch.no_grad():
+                    zc = self.model.encode(chart, numeric, context, instrument_id=ids)
+                zn = F.normalize(zc, dim=-1)
+                sim = zn @ zn.t() / max(self.cfg.temperature, 1e-3)
+                eye = torch.eye(ids.numel(), dtype=torch.bool, device=ids.device)
+                same = ids.view(-1, 1) == ids.view(1, -1)
+                peers = same & ~eye
+                if bool(peers.sum(-1).ge(1).all().item()):
+                    target_idx = peers.float().argmax(dim=-1)
+                    losses["instrument_z"] = (
+                        self.cfg.instrument_z_contrast_w * F.cross_entropy(sim, target_idx)
+                    )
+
         # Total = weighted sum.
         total = (
             self.cfg.weight_temporal * losses.get("temporal", torch.zeros((), device=self.device))
@@ -789,6 +891,7 @@ class SSLPretrainer:
             + self.cfg.weight_masked * losses.get("masked", torch.zeros((), device=self.device))
             + losses.get("trunk_align", torch.zeros((), device=self.device))
             + losses.get("instrument_contrast", torch.zeros((), device=self.device))
+            + losses.get("instrument_z", torch.zeros((), device=self.device))
         )
         losses["total"] = total
         return losses
@@ -857,6 +960,14 @@ class SSLPretrainer:
         self.opt.zero_grad(set_to_none=True)
         if do_update:
             loss.backward()
+            # P2: rebalance modalities. The measured grad share is numeric ~40%
+            # vs vision ~2%, which makes z numeric-dominated (and drives the
+            # numeric-perturb angle + recon weakness). Scale vision grads AFTER
+            # backward, BEFORE clipping. 1.0 disables.
+            if self.cfg.vision_grad_scale != 1.0:
+                for name, p in self.model.named_parameters():
+                    if name.startswith("vision.") and p.grad is not None:
+                        p.grad.mul_(self.cfg.vision_grad_scale)
             # Clip gradients across the full SSL parameter set (model +
             # projection heads + reconstructor) — gradient explosion in
             # the projection heads was a known failure mode in v0.1.
