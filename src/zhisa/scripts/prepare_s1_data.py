@@ -154,6 +154,15 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Root with per-symbol bookdepth 1h parquets (default data/bookdepth/1h).",
     )
     p.add_argument(
+        "--with-spot", action="store_true",
+        help="Add dual-market channels (ctx_spot_basis_1h, ctx_spot_vol_ratio_1h) "
+        "from a separate SPOT TSDB root (uniform schema).",
+    )
+    p.add_argument(
+        "--spot-root", type=Path, default=None,
+        help="SPOT TSDB root (default data/tsdb_spot).",
+    )
+    p.add_argument(
         "--context-root", type=Path, default=Path(DEFAULT_CONTEXT_ROOT),
         help="Root containing SYMBOL/timeframe/context.parquet files.",
     )
@@ -240,6 +249,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         fear_greed_cache=Path(args.fear_greed_cache) if args.fear_greed_cache else None,
         with_bookdepth=bool(args.with_bookdepth),
         bookdepth_root=Path(args.bookdepth_root) if args.bookdepth_root else None,
+        with_spot=bool(args.with_spot),
+        spot_root=Path(args.spot_root) if args.spot_root else None,
         gap_policy=gap_policy,
         coverage_policy=coverage_policy,
         train_frac=float(args.train_frac),

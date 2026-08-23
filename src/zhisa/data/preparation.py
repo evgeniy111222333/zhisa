@@ -135,6 +135,10 @@ class PrepareConfig:
     # stage is skipped to avoid a per-symbol feature-width difference).
     with_bookdepth: bool = False
     bookdepth_root: Optional[Path] = None
+    # Dual-market channel: spot basis + spot/perp volume ratio, derived from a
+    # separate SPOT TSDB root (``data/tsdb_spot/<SYM>/1h``). Same uniform rule.
+    with_spot: bool = False
+    spot_root: Optional[Path] = None
     gap_policy: GapPolicy = None  # type: ignore[assignment]
     coverage_policy: CoveragePolicy = None  # type: ignore[assignment]
     train_frac: float = 0.70
@@ -450,6 +454,57 @@ def _join_bookdepth(
     return per_symbol, info
 
 
+def _join_spot_channels(
+    per_symbol: dict[str, pd.DataFrame],
+    cfg: PrepareConfig,
+) -> tuple[dict[str, pd.DataFrame], dict]:
+    """Add dual-market channels: spot basis and spot/perp volume ratio.
+
+    ``ctx_spot_basis_1h   = (perp_close - spot_close) / spot_close``
+    ``ctx_spot_vol_ratio_1h = perp_volume / spot_volume``
+    Both are shifted by 1 bar so a sample only uses information known before the
+    bar (causal). Uniform-schema rule: if ANY symbol lacks a spot series the
+    whole stage is dropped.
+    """
+    if not cfg.with_spot:
+        return per_symbol, {"enabled": False}
+    from zhisa.scripts._real_data import futures_context_symbol_slug
+    from zhisa.storage.tsdb import SeriesKey, TimeSeriesDB
+    sroot = Path(cfg.spot_root) if cfg.spot_root else Path("data/tsdb_spot")
+    sdb = TimeSeriesDB(sroot)
+    newcols = ("ctx_spot_basis_1h", "ctx_spot_vol_ratio_1h")
+    info: dict = {"symbols": [], "missing": []}
+    out: dict[str, pd.DataFrame] = {}
+    for sym, df in per_symbol.items():
+        key = SeriesKey(sym, Timeframe.H1)
+        if not sdb.has_series(key):
+            info["missing"].append(sym)
+            out[sym] = df
+            continue
+        sp = sdb.read(key)
+        sc = sp["close"].reindex(df.index, method="ffill")
+        sv = sp["volume"].reindex(df.index, method="ffill")
+        basis = ((df["close"] - sc) / (sc + 1e-12)).shift(1)
+        vratio = (df["volume"] / (sv + 1e-12)).shift(1)
+        out[sym] = df.assign(
+            ctx_spot_basis_1h=basis.astype(np.float32),
+            ctx_spot_vol_ratio_1h=vratio.astype(np.float32),
+        )
+        info["symbols"].append(sym)
+    if info["symbols"] and not info["missing"]:
+        per_symbol = out
+        info["dropped"] = False
+    else:
+        if info["symbols"]:
+            logger.warning("spot series missing for %s -> dropping spot channels", info["missing"])
+            for sym, df in out.items():
+                out[sym] = df.drop(columns=[c for c in newcols if c in df.columns])
+            per_symbol = out
+            info["dropped"] = True
+        info["symbols"] = []
+    return per_symbol, info
+
+
 # ---------------------------------------------------------------------------
 # Stage 8 — temporal splits
 # ---------------------------------------------------------------------------
@@ -634,6 +689,11 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
     if cfg.with_bookdepth:
         with_ctx, bd_info = _join_bookdepth(with_ctx, cfg)
         log["stages"]["bookdepth"] = bd_info
+
+    # 5d. Dual-market: spot basis + spot/perp volume ratio (uniform rule).
+    if cfg.with_spot:
+        with_ctx, spot_info = _join_spot_channels(with_ctx, cfg)
+        log["stages"]["spot_channels"] = spot_info
 
     # 6. Schema assert
     for sym, df in with_ctx.items():
