@@ -145,6 +145,15 @@ def _build_argparser() -> argparse.ArgumentParser:
         "(default data/fear_greed/fear_greed.parquet).",
     )
     p.add_argument(
+        "--with-bookdepth", action="store_true",
+        help="Join intraday order-book depth channels (bd_*) from "
+        "data/bookdepth/1h into every symbol (uniform schema).",
+    )
+    p.add_argument(
+        "--bookdepth-root", type=Path, default=None,
+        help="Root with per-symbol bookdepth 1h parquets (default data/bookdepth/1h).",
+    )
+    p.add_argument(
         "--context-root", type=Path, default=Path(DEFAULT_CONTEXT_ROOT),
         help="Root containing SYMBOL/timeframe/context.parquet files.",
     )
@@ -229,6 +238,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         require_all_context=bool(args.require_all_context),
         with_fear_greed=bool(args.with_fear_greed),
         fear_greed_cache=Path(args.fear_greed_cache) if args.fear_greed_cache else None,
+        with_bookdepth=bool(args.with_bookdepth),
+        bookdepth_root=Path(args.bookdepth_root) if args.bookdepth_root else None,
         gap_policy=gap_policy,
         coverage_policy=coverage_policy,
         train_frac=float(args.train_frac),

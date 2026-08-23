@@ -130,6 +130,11 @@ class PrepareConfig:
     # EVERY symbol as ``ctx_fng_index`` (same value, deterministic, 1-bar lag).
     with_fear_greed: bool = False
     fear_greed_cache: Optional[Path] = None
+    # Intraday order-book depth (Binance bookDepth -> 1h aggregates). Joined
+    # per symbol when EVERY symbol has a parquet (uniform schema; otherwise the
+    # stage is skipped to avoid a per-symbol feature-width difference).
+    with_bookdepth: bool = False
+    bookdepth_root: Optional[Path] = None
     gap_policy: GapPolicy = None  # type: ignore[assignment]
     coverage_policy: CoveragePolicy = None  # type: ignore[assignment]
     train_frac: float = 0.70
@@ -401,6 +406,50 @@ def _merge_context(
     return out, info
 
 
+def _join_bookdepth(
+    per_symbol: dict[str, pd.DataFrame],
+    cfg: PrepareConfig,
+) -> tuple[dict[str, pd.DataFrame], dict]:
+    """Join per-1h order-book depth channels into every symbol's frame.
+
+    Schema rule: the ``bd_*`` columns are only added if EVERY symbol has a depth
+    parquet — otherwise the stage is skipped entirely so no symbol ends up with
+    a different numeric width.
+    """
+    if not cfg.with_bookdepth:
+        return per_symbol, {"enabled": False}
+    from zhisa.scripts._real_data import futures_context_symbol_slug
+    root = Path(cfg.bookdepth_root) if cfg.bookdepth_root else Path("data/bookdepth/1h")
+    info: dict = {"symbols": [], "missing": []}
+    joined: dict[str, pd.DataFrame] = {}
+    for sym, df in per_symbol.items():
+        p = root / f"{futures_context_symbol_slug(sym)}.parquet"
+        if not p.is_file():
+            info["missing"].append(sym)
+            joined[sym] = df
+            continue
+        bd = pd.read_parquet(p)
+        bd_cols = [c for c in bd.columns if c.startswith("bd_")]
+        joined[sym] = df.join(bd[bd_cols], how="left")
+        info["symbols"].append(sym)
+    if info["symbols"] and not info["missing"]:
+        per_symbol = joined
+        info["dropped"] = False
+    else:
+        # Uniform schema: partial coverage would create asymmetric feature widths.
+        if info["symbols"]:
+            logger.warning(
+                "bookdepth present for %d/%d symbols -> dropping bd_* for uniform schema",
+                len(info["symbols"]), len(per_symbol),
+            )
+            for sym, df in joined.items():
+                joined[sym] = df.drop(columns=[c for c in df.columns if c.startswith("bd_")])
+            per_symbol = joined
+            info["dropped"] = True
+        info["symbols"] = []
+    return per_symbol, info
+
+
 # ---------------------------------------------------------------------------
 # Stage 8 — temporal splits
 # ---------------------------------------------------------------------------
@@ -580,6 +629,11 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
         for sym, df in with_ctx.items():
             with_ctx[sym] = df.assign(ctx_fng_index=fear_greed_column(df.index, fng))
         log["stages"]["fear_greed"] = fng_info
+
+    # 5c. Intraday order-book depth (bookDepth per-1h aggregates), uniform across symbols.
+    if cfg.with_bookdepth:
+        with_ctx, bd_info = _join_bookdepth(with_ctx, cfg)
+        log["stages"]["bookdepth"] = bd_info
 
     # 6. Schema assert
     for sym, df in with_ctx.items():
