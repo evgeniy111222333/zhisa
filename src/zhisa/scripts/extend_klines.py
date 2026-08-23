@@ -32,8 +32,8 @@ from zhisa.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-FUTURES_BASE = "https://data.binance.vision/data/futures/um/daily/klines"
-SPOT_BASE = "https://data.binance.vision/data/spot/daily/klines"
+FUTURES_BASE = "https://data.binance.vision/data/futures/um"
+SPOT_BASE = "https://data.binance.vision/data/spot"
 FUTURES_ROOT = Path("data/tsdb")
 SPOT_ROOT = Path("data/tsdb_spot")
 SYMBOLS_37 = [
@@ -48,73 +48,79 @@ SYMBOLS_37 = [
 START = date(2017, 8, 17)  # earliest Vision archives
 
 
-def fetch_kline_day(base: str, slug: str, tf: str, day: date) -> pd.DataFrame | None:
-    url = f"{base}/{slug}/{tf}/{slug}-{tf}-{day.isoformat()}.zip"
-    for attempt in range(4):
+def fetch_kline_month(base: str, slug: str, tf: str, ym: date, retries: int = 4) -> pd.DataFrame | None:
+    """Fetch a whole month of klines as a single zip (efficiency: ~74 requests
+    per symbol instead of ~2100 daily ones)."""
+    url = f"{base}/monthly/klines/{slug}/{tf}/{slug}-{tf}-{ym.strftime('%Y-%m')}.zip"
+    for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "zhisa/1.0"})
-            with urllib.request.urlopen(req, timeout=30) as res:
+            with urllib.request.urlopen(req, timeout=60) as res:
                 data = res.read()
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 with z.open(z.namelist()[0]) as f:
                     df = pd.read_csv(f, header=None)
             if df is None or df.empty:
                 return None
-            df.columns = [str(i) for i in range(df.shape[1])]
+            # Monthly archives carry a header row; daily ones do not.
+            if str(df.iloc[0, 0]).strip().lower() == "open_time":
+                df = df.iloc[1:]
             out = pd.DataFrame({
                 "timestamp": pd.to_datetime(df[0].astype(int), unit="ms", utc=True),
                 "open": df[1].astype(float), "high": df[2].astype(float),
                 "low": df[3].astype(float), "close": df[4].astype(float),
                 "volume": df[5].astype(float),
             })
-            return out.set_index("timestamp")[OHLCV_COLUMNS]
+            return out.set_index("timestamp")[["open", "high", "low", "close", "volume"]]
         except HTTPError as e:
             if e.code == 404:
                 return None
             import time
-            time.sleep(2 + attempt * 2)
+            time.sleep(0.5 + attempt * 0.5)
         except Exception:
             import time
-            time.sleep(2 + attempt * 2)
+            time.sleep(0.5 + attempt * 0.5)
     return None
 
 
-def _day_range(start: date, end: date):
-    d = start
-    while d <= end:
-        yield d
-        d += timedelta(days=1)
+def _months(start: date, end: date):
+    cur = start.replace(day=1)
+    while cur <= end:
+        yield cur
+        y = cur.year + (1 if cur.month == 12 else 0)
+        m = 1 if cur.month == 12 else cur.month + 1
+        cur = date(y, m, 1)
 
 
 def ingest_missing(db: TimeSeriesDB, sym: str, tf: Timeframe, base: str, start: date, end: date,
-                   workers: int = 8) -> dict:
+                   workers: int = 4) -> dict:
     key = SeriesKey(sym, tf)
     existing_end = None
     if db.has_series(key):
         existing_end = db.get_meta(key).end.date()
+        if existing_end >= end:
+            return {"symbol": sym, "skipped": "fresh", "rows": db.get_meta(key).row_count}
     day_start = (existing_end + timedelta(days=1)) if existing_end else start
-    days = list(_day_range(day_start, end))
-    if not days:
-        return {"symbol": sym, "skipped": "fresh", "rows": db.get_meta(key).row_count}
+    months = list(_months(day_start, end))
     slug = futures_context_symbol_slug(sym)
     chunks = []
     ok = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(fetch_kline_day, base, slug, tf.value, d): d for d in days}
+        futs = {ex.submit(fetch_kline_month, base, slug, tf.value, m): m for m in months}
         for f in as_completed(futs):
             try:
-                df = f.result()
+                mdf = f.result()
             except Exception:
-                df = None
-            if df is not None and len(df):
-                chunks.append(df)
+                mdf = None
+            if mdf is not None and len(mdf):
+                chunks.append(mdf)
                 ok += 1
     if not chunks:
-        return {"symbol": sym, "days": len(days), "ok": 0, "rows": 0}
+        return {"symbol": sym, "months": len(months), "ok": 0, "rows": db.get_meta(key).row_count if db.has_series(key) else 0}
     full = pd.concat(chunks).sort_index()
     full = full[~full.index.duplicated(keep="last")]
     meta = db.ingest(key, full)
-    return {"symbol": sym, "days": len(days), "ok": ok, "rows": int(meta.row_count)}
+    return {"symbol": sym, "months": len(months), "ok": ok, "rows": int(meta.row_count)}
 
 
 def main(argv=None) -> int:

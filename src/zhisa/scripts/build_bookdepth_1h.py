@@ -117,7 +117,7 @@ def build_symbol(sym: str, out_root: Path, start: date, end: date) -> Path:
     chunks = []
     ok_days = 0
     from concurrent.futures import ThreadPoolExecutor as _TPE
-    with _TPE(max_workers=8) as ex:
+    with _TPE(max_workers=4) as ex:
         futs = {ex.submit(fetch_day, sym, d): d for d in days}
         for f in as_completed(futs):
             day = futs[f]
