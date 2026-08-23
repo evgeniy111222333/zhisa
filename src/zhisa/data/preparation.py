@@ -126,6 +126,10 @@ class PrepareConfig:
     # otherwise that symbol would silently end up with a different numeric
     # feature width (no ctx_* columns) and break the dataset's schema.
     require_all_context: bool = False
+    # Global sentiment channel (alternative.me Fear & Greed), injected into
+    # EVERY symbol as ``ctx_fng_index`` (same value, deterministic, 1-bar lag).
+    with_fear_greed: bool = False
+    fear_greed_cache: Optional[Path] = None
     gap_policy: GapPolicy = None  # type: ignore[assignment]
     coverage_policy: CoveragePolicy = None  # type: ignore[assignment]
     train_frac: float = 0.70
@@ -566,6 +570,16 @@ def prepare_dataset(cfg: PrepareConfig) -> PreparedDataset:
         }
     with_ctx, ctx_info = _merge_context(aligned, cfg)
     log["stages"]["context_merge"] = ctx_info
+
+    # 5b. Global sentiment channel (Fear & Greed) injected into every symbol.
+    if cfg.with_fear_greed:
+        from zhisa.data.fear_greed import fear_greed_column, load_fear_greed
+        fng = load_fear_greed(cfg.fear_greed_cache
+                              if cfg.fear_greed_cache else "data/fear_greed/fear_greed.parquet")
+        fng_info = {"n_days": int(len(fng))}
+        for sym, df in with_ctx.items():
+            with_ctx[sym] = df.assign(ctx_fng_index=fear_greed_column(df.index, fng))
+        log["stages"]["fear_greed"] = fng_info
 
     # 6. Schema assert
     for sym, df in with_ctx.items():

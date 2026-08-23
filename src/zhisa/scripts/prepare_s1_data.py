@@ -135,6 +135,16 @@ def _build_argparser() -> argparse.ArgumentParser:
         "(keeps the dataset's numeric schema uniform across symbols).",
     )
     p.add_argument(
+        "--with-fear-greed", action="store_true",
+        help="Inject the global Fear & Greed index (ctx_fng_index) into every "
+        "symbol as a deterministic, 1-bar-lagged sentiment channel.",
+    )
+    p.add_argument(
+        "--fear-greed-cache", type=Path, default=None,
+        help="Path to the local Fear & Greed parquet snapshot "
+        "(default data/fear_greed/fear_greed.parquet).",
+    )
+    p.add_argument(
         "--context-root", type=Path, default=Path(DEFAULT_CONTEXT_ROOT),
         help="Root containing SYMBOL/timeframe/context.parquet files.",
     )
@@ -217,6 +227,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         with_futures_context=bool(args.with_futures_context),
         context_root=Path(args.context_root) if args.with_futures_context else None,
         require_all_context=bool(args.require_all_context),
+        with_fear_greed=bool(args.with_fear_greed),
+        fear_greed_cache=Path(args.fear_greed_cache) if args.fear_greed_cache else None,
         gap_policy=gap_policy,
         coverage_policy=coverage_policy,
         train_frac=float(args.train_frac),
