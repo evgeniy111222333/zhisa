@@ -32,10 +32,41 @@ from zhisa.utils.logging import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_ROOT = Path("data/tsdb")
+MICRO_COLS = ["micro_bars_1h", "micro_range_ratio_1h",
+              "micro_max_1m_ret_1h", "micro_top_vol_share_1h"]
 SYMBOLS_12 = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT", "XRP/USDT",
     "DOGE/USDT", "LINK/USDT", "AVAX/USDT", "LTC/USDT", "DOT/USDT", "TRX/USDT",
 ]
+
+
+def ensure_micro_schema_symbol(db: TimeSeriesDB, sym_ccxt: str) -> dict:
+    """Guarantee the 1h series has the 4 micro columns.
+
+    Real aggregation when a 1m series exists; all-NaN placeholder columns
+    otherwise, so a multi-symbol prepared root keeps a uniform numeric schema
+    (without this, symbols lacking 1m data would expose a different feature
+    width and break the model input).
+    """
+    key_h = SeriesKey(sym_ccxt, Timeframe.H1)
+    if not db.has_series(key_h):
+        return {"symbol": sym_ccxt, "status": "no_1h"}
+    h1 = db.read(key_h)
+    have = [c for c in MICRO_COLS if c in h1.columns]
+    if set(have) == set(MICRO_COLS):
+        return {"symbol": sym_ccxt, "status": "ok", "micro": "present"}
+    if db.has_series(SeriesKey(sym_ccxt, Timeframe.M1)):
+        micro = build_micro_1h(db.read(SeriesKey(sym_ccxt, Timeframe.M1)))
+        micro_real = True
+    else:
+        micro = pd.DataFrame(index=h1.index, columns=MICRO_COLS, dtype="float32")
+        micro_real = False
+    joined = h1.join(micro[~micro.index.duplicated(keep="last")], how="left")
+    order = [c for c in h1.columns if c not in MICRO_COLS] + MICRO_COLS
+    joined = joined[order]
+    db.ingest(key_h, joined)
+    return {"symbol": sym_ccxt, "status": "ingested",
+            "micro": "real" if micro_real else "nan_placeholder"}
 
 
 def build_micro_1h(m1: pd.DataFrame) -> pd.DataFrame:
@@ -70,10 +101,27 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", default=",".join(SYMBOLS_12))
     ap.add_argument("--tsdb-root", default=str(DEFAULT_ROOT))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--normalize-all", action="store_true",
+                    help="ensure EVERY 1h series in the TSDB has the micro columns "
+                         "(real from 1m, else NaN placeholders) for a uniform schema")
     args = ap.parse_args(argv)
 
     db = TimeSeriesDB(Path(args.tsdb_root))
     rc = 0
+    if args.normalize_all:
+        from zhisa.storage.tsdb import SeriesKey  # noqa: F401
+        h1syms = sorted({k.instrument_slug for k in db.list_series()
+                         if k.timeframe.value == "1h"})
+        for slug in h1syms:
+            sym = slug.replace("_", "/")
+            try:
+                if args.dry_run:
+                    print(f"{sym:12s} would-normalize")
+                    continue
+                print(f"  {ensure_micro_schema_symbol(db, sym)}")
+            except Exception as exc:  # per-symbol tolerance
+                print(f"  ! {sym}: {type(exc).__name__}: {exc}")
+        return 0
     for sym in [s.strip() for s in args.symbols.split(",") if s.strip()]:
         key_h = SeriesKey(sym, Timeframe.H1)
         key_m1 = SeriesKey(sym, Timeframe.M1)

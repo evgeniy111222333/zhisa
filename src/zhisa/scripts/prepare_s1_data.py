@@ -130,6 +130,11 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Disable futures-context merge even when context files exist.",
     )
     p.add_argument(
+        "--require-all-context", action="store_true",
+        help="Fail the run if any symbol lacks a futures-context parquet "
+        "(keeps the dataset's numeric schema uniform across symbols).",
+    )
+    p.add_argument(
         "--context-root", type=Path, default=Path(DEFAULT_CONTEXT_ROOT),
         help="Root containing SYMBOL/timeframe/context.parquet files.",
     )
@@ -211,6 +216,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         context_timeframe=str(args.context_timeframe) if args.context_timeframe else str(args.timeframe),
         with_futures_context=bool(args.with_futures_context),
         context_root=Path(args.context_root) if args.with_futures_context else None,
+        require_all_context=bool(args.require_all_context),
         gap_policy=gap_policy,
         coverage_policy=coverage_policy,
         train_frac=float(args.train_frac),

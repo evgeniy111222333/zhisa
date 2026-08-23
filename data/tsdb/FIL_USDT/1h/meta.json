@@ -9,10 +9,14 @@
     "high",
     "low",
     "close",
-    "volume"
+    "volume",
+    "micro_bars_1h",
+    "micro_range_ratio_1h",
+    "micro_max_1m_ret_1h",
+    "micro_top_vol_share_1h"
   ],
-  "size_bytes": 1637455,
-  "checksum": "e0c4993ceb5306e7b239afc896425a05",
-  "created_at": "2026-08-23T16:59:02.206434+00:00",
-  "updated_at": "2026-08-23T16:59:02.206434+00:00"
+  "size_bytes": 1640019,
+  "checksum": "e3a01ab96c18b98fd27d20f1888e82ec",
+  "created_at": "2026-08-23T17:12:00.769077+00:00",
+  "updated_at": "2026-08-23T17:12:00.769077+00:00"
 }

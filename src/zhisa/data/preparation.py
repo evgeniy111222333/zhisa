@@ -122,6 +122,10 @@ class PrepareConfig:
     context_timeframe: str = V1_TIMEFRAME_15M
     with_futures_context: bool = True
     context_root: Optional[Path] = None
+    # When True, a prepared run FAILS if any symbol has no context parquet —
+    # otherwise that symbol would silently end up with a different numeric
+    # feature width (no ctx_* columns) and break the dataset's schema.
+    require_all_context: bool = False
     gap_policy: GapPolicy = None  # type: ignore[assignment]
     coverage_policy: CoveragePolicy = None  # type: ignore[assignment]
     train_frac: float = 0.70
@@ -363,6 +367,20 @@ def _merge_context(
             logger.warning("context merge failed for %s: %s", sym, exc)
             out[sym] = df
             info["skipped"].append({"symbol": sym, "reason": f"merge_failed: {exc}"})
+    if (
+        cfg.with_futures_context
+        and cfg.context_root is not None
+        and cfg.require_all_context
+    ):
+        missing = [
+            sym for sym, df in out.items()
+            if not ((df.attrs.get("context_merge", {}) or {}).get("columns_added"))
+        ]
+        if missing:
+            raise ValueError(
+                "require_all_context: symbol(s) have NO futures-context columns: "
+                f"{sorted(missing)}. Add context parquets first (ensure_futures_context)"
+            )
     return out, info
 
 
