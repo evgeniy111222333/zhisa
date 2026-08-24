@@ -1,0 +1,18 @@
+{
+  "instrument": "OP/USDT",
+  "timeframe": "1h",
+  "start": "2022-06-01T08:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 22671,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 595379,
+  "checksum": "27e9b7307a7fe56e33e16017f1b7239d",
+  "created_at": "2026-08-23T20:35:26.972624+00:00",
+  "updated_at": "2026-08-23T20:35:26.972624+00:00"
+}

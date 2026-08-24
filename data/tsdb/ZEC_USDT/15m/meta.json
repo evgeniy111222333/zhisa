@@ -1,0 +1,18 @@
+{
+  "instrument": "ZEC/USDT",
+  "timeframe": "15m",
+  "start": "2020-02-05T08:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 226912,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 5948775,
+  "checksum": "50540bf7bb4aa6f50269297c911b1180",
+  "created_at": "2026-08-23T20:30:15.984711+00:00",
+  "updated_at": "2026-08-23T20:30:15.984711+00:00"
+}

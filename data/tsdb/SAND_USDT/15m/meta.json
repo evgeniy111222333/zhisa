@@ -1,0 +1,18 @@
+{
+  "instrument": "SAND/USDT",
+  "timeframe": "15m",
+  "start": "2021-01-25T07:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 192836,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 6321252,
+  "checksum": "0f2b15300d60a603f70de0292d247141",
+  "created_at": "2026-08-23T20:30:46.882960+00:00",
+  "updated_at": "2026-08-23T20:30:46.882960+00:00"
+}

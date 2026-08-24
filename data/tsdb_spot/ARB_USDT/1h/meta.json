@@ -1,0 +1,18 @@
+{
+  "instrument": "ARB/USDT",
+  "timeframe": "1h",
+  "start": "2023-03-23T15:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 15584,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 551805,
+  "checksum": "f3ad3dd459715c2551a1eb70b4671b13",
+  "created_at": "2026-08-23T20:35:44.274015+00:00",
+  "updated_at": "2026-08-23T20:35:44.274015+00:00"
+}

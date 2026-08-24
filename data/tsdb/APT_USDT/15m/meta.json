@@ -1,0 +1,18 @@
+{
+  "instrument": "APT/USDT",
+  "timeframe": "15m",
+  "start": "2022-10-19T02:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 132664,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 4346488,
+  "checksum": "b4d1b842f596b41d6f45094951447a65",
+  "created_at": "2026-08-23T20:28:44.539751+00:00",
+  "updated_at": "2026-08-23T20:28:44.539751+00:00"
+}

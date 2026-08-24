@@ -1,0 +1,18 @@
+{
+  "instrument": "EGLD/USDT",
+  "timeframe": "15m",
+  "start": "2020-09-14T07:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 206084,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 5519783,
+  "checksum": "52369c34e0b43cb359021d42c787ee27",
+  "created_at": "2026-08-23T20:30:18.134426+00:00",
+  "updated_at": "2026-08-23T20:30:18.134426+00:00"
+}

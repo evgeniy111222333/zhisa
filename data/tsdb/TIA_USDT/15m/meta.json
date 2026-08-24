@@ -1,0 +1,18 @@
+{
+  "instrument": "TIA/USDT",
+  "timeframe": "15m",
+  "start": "2023-10-31T18:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 96408,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 3536517,
+  "checksum": "a86c869328a42f364fad05eb5c9bdacb",
+  "created_at": "2026-08-23T20:30:08.437064+00:00",
+  "updated_at": "2026-08-23T20:30:08.437064+00:00"
+}

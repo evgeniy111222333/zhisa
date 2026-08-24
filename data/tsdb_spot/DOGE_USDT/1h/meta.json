@@ -1,0 +1,18 @@
+{
+  "instrument": "DOGE/USDT",
+  "timeframe": "1h",
+  "start": "2019-07-05T12:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 48113,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1938304,
+  "checksum": "cd101266347a3539faba2a585a5e53c9",
+  "created_at": "2026-08-23T20:33:36.889557+00:00",
+  "updated_at": "2026-08-23T20:33:36.889557+00:00"
+}

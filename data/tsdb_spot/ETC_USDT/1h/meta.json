@@ -1,0 +1,18 @@
+{
+  "instrument": "ETC/USDT",
+  "timeframe": "1h",
+  "start": "2018-06-12T02:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 57401,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 2021680,
+  "checksum": "3c9b1c6b8852246465463750ab465682",
+  "created_at": "2026-08-23T20:36:32.721280+00:00",
+  "updated_at": "2026-08-23T20:36:32.721280+00:00"
+}

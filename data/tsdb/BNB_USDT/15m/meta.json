@@ -2,8 +2,8 @@
   "instrument": "BNB/USDT",
   "timeframe": "15m",
   "start": "2019-01-01T00:00:00+00:00",
-  "end": "2026-06-20T18:30:00+00:00",
-  "row_count": 261597,
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 265554,
   "columns": [
     "open",
     "high",
@@ -11,8 +11,8 @@
     "close",
     "volume"
   ],
-  "size_bytes": 8392594,
-  "checksum": "c164c8b15189eb3dae27b940cba861f6",
-  "created_at": "2026-06-20T19:02:35.248820+00:00",
-  "updated_at": "2026-06-20T19:02:35.248820+00:00"
+  "size_bytes": 8492409,
+  "checksum": "632a1b40f7c99b61155f200d3b42d1e4",
+  "created_at": "2026-08-23T20:28:12.184565+00:00",
+  "updated_at": "2026-08-23T20:28:12.184565+00:00"
 }

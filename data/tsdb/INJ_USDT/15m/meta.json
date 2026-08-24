@@ -1,0 +1,18 @@
+{
+  "instrument": "INJ/USDT",
+  "timeframe": "15m",
+  "start": "2022-08-17T02:45:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 138709,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 3960535,
+  "checksum": "ef04666c888600f274f74c58dd940a22",
+  "created_at": "2026-08-23T20:29:13.227926+00:00",
+  "updated_at": "2026-08-23T20:29:13.227926+00:00"
+}

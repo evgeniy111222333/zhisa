@@ -1,0 +1,18 @@
+{
+  "instrument": "FIL/USDT",
+  "timeframe": "1h",
+  "start": "2020-10-15T17:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 36900,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1177871,
+  "checksum": "4835a14a016b245af76d98cb5edcac44",
+  "created_at": "2026-08-23T20:36:49.686706+00:00",
+  "updated_at": "2026-08-23T20:36:49.686706+00:00"
+}

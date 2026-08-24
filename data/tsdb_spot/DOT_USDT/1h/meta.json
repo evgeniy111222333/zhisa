@@ -1,0 +1,18 @@
+{
+  "instrument": "DOT/USDT",
+  "timeframe": "1h",
+  "start": "2020-08-18T23:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 38286,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1240419,
+  "checksum": "f901984f667a166ac875d00023379e40",
+  "created_at": "2026-08-23T20:34:39.691572+00:00",
+  "updated_at": "2026-08-23T20:34:39.691572+00:00"
+}

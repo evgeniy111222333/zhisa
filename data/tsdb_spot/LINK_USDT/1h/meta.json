@@ -1,0 +1,18 @@
+{
+  "instrument": "LINK/USDT",
+  "timeframe": "1h",
+  "start": "2019-01-16T10:00:00+00:00",
+  "end": "2024-12-31T23:00:00+00:00",
+  "row_count": 52179,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 1853612,
+  "checksum": "b1e9d229ca5517861ef59d1698a77c18",
+  "created_at": "2026-08-23T20:33:38.357602+00:00",
+  "updated_at": "2026-08-23T20:33:38.357602+00:00"
+}

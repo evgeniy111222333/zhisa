@@ -1,0 +1,18 @@
+{
+  "instrument": "ICP/USDT",
+  "timeframe": "15m",
+  "start": "2021-05-11T03:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 180650,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 4285709,
+  "checksum": "c290e9b982b3e01315e75f7aa82911b4",
+  "created_at": "2026-08-23T20:29:45.091963+00:00",
+  "updated_at": "2026-08-23T20:29:45.091963+00:00"
+}

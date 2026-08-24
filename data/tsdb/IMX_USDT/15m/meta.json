@@ -1,0 +1,18 @@
+{
+  "instrument": "IMX/USDT",
+  "timeframe": "15m",
+  "start": "2022-02-11T03:30:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 156178,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 4172303,
+  "checksum": "bcb0f31dcf70b527da8272f69101660e",
+  "created_at": "2026-08-23T20:30:36.358629+00:00",
+  "updated_at": "2026-08-23T20:30:36.358629+00:00"
+}

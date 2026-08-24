@@ -1,0 +1,18 @@
+{
+  "instrument": "MANA/USDT",
+  "timeframe": "15m",
+  "start": "2021-03-15T07:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 188132,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 4849762,
+  "checksum": "a52b02c2ccc2e1ac285cc1c0cd7c3345",
+  "created_at": "2026-08-23T20:30:47.539376+00:00",
+  "updated_at": "2026-08-23T20:30:47.539376+00:00"
+}

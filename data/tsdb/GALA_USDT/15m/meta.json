@@ -1,0 +1,18 @@
+{
+  "instrument": "GALA/USDT",
+  "timeframe": "15m",
+  "start": "2021-09-18T03:30:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 170674,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 4852726,
+  "checksum": "eb3b0e0a6a5dfaf50f5ea817a8490aab",
+  "created_at": "2026-08-23T20:30:48.792307+00:00",
+  "updated_at": "2026-08-23T20:30:48.792307+00:00"
+}

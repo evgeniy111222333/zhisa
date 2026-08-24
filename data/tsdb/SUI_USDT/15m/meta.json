@@ -1,0 +1,18 @@
+{
+  "instrument": "SUI/USDT",
+  "timeframe": "15m",
+  "start": "2023-05-03T16:00:00+00:00",
+  "end": "2026-07-31T23:45:00+00:00",
+  "row_count": 113792,
+  "columns": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume"
+  ],
+  "size_bytes": 3576023,
+  "checksum": "996e4762412129f08a7d60ad3e8d397b",
+  "created_at": "2026-08-23T20:29:11.642203+00:00",
+  "updated_at": "2026-08-23T20:29:11.642203+00:00"
+}
